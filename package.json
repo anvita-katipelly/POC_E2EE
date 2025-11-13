@@ -8,6 +8,8 @@
     "sender": "node src/client/sender.js",
     "receiver": "node src/client/receiver.js",
     "auto-receiver": "node src/client/autoReceiver.js",
+    "send-message": "node src/client/messageSender.js",
+    "receive-message": "node src/client/messageReceiver.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],

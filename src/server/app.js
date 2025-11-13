@@ -7,6 +7,7 @@ const { ensureDirectory } = require('../utils/fileUtils');
 const autoProcessService = require('./services/autoProcessService');
 const uploadRoutes = require('./routes/uploadRoutes');
 const downloadRoutes = require('./routes/downloadRoutes');
+const messageRoutes = require('./routes/messageRoutes');
 const debugRoutes = require('./routes/debugRoutes');
 
 // Initialize directories
@@ -23,6 +24,7 @@ app.use(express.json({ limit: SERVER.JSON_LIMIT }));
 // Routes
 app.use(uploadRoutes);
 app.use(downloadRoutes);
+app.use(messageRoutes);
 app.use(debugRoutes);
 
 // Background service: periodically check for files ready to process
