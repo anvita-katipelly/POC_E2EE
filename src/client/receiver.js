@@ -11,6 +11,7 @@ const { verifyHMAC } = require('../utils/crypto');
 const { createDecipher } = require('../utils/crypto');
 const zlib = require('zlib');
 const { log } = require('../utils/logger');
+const { UPLOAD } = require('../config/constants');
 
 const SERVER = process.argv[2] || 'http://localhost:3000';
 const FILE_ID = process.argv[3];
@@ -20,8 +21,44 @@ if (!FILE_ID) {
   process.exit(1);
 }
 
+const MAX_RETRIES = UPLOAD.MAX_RETRIES;
+const RETRY_BASE_MS = UPLOAD.RETRY_BASE_MS;
+
+async function sleep(ms) {
+  return new Promise(r => setTimeout(r, ms));
+}
+
 // Ensure output directory exists
 ensureDirectory(DECRYPTED_DIR);
+
+// Chunk download function with retry
+async function downloadChunkWithRetry(fileId, chunkIndex) {
+  let attempt = 0;
+  while (attempt < MAX_RETRIES) {
+    try {
+      const resp = await axios.get(`${SERVER}/download-chunk/${fileId}/${chunkIndex}`, {
+        responseType: 'arraybuffer',
+        timeout: UPLOAD.TIMEOUT,
+      });
+      const buf = Buffer.from(resp.data);
+      log('Downloaded chunk', { fileId, chunkIndex, bytes: buf.length, attempt });
+      return buf;
+    } catch (err) {
+      attempt++;
+      const wait = RETRY_BASE_MS * Math.pow(2, attempt);
+      log('Chunk download failed, retrying', {
+        fileId,
+        chunkIndex,
+        attempt,
+        err: err.message,
+        waitMs: wait,
+      });
+      await sleep(wait);
+    }
+  }
+  log('Chunk download failed permanently', { fileId, chunkIndex });
+  throw new Error(`Failed to download chunk ${chunkIndex} after ${MAX_RETRIES} attempts`);
+}
 
 (async () => {
   try {
@@ -34,17 +71,13 @@ ensureDirectory(DECRYPTED_DIR);
     const mediaKey = Buffer.from(mediaKeyHex, 'hex');
     const iv = Buffer.from(ivHex, 'hex');
 
-    // 2) Download and concatenate ciphertext chunks
+    // 2) Download and concatenate ciphertext chunks with retry
     const chunks = [];
     let totalBytes = 0;
     for (let i = 0; i < totalChunks; i++) {
-      const resp = await axios.get(`${SERVER}/download-chunk/${FILE_ID}/${i}`, {
-        responseType: 'arraybuffer',
-      });
-      const buf = Buffer.from(resp.data);
+      const buf = await downloadChunkWithRetry(FILE_ID, i);
       chunks.push(buf);
       totalBytes += buf.length;
-      log('Downloaded chunk', { chunkIndex: i, bytes: buf.length });
     }
     const ciphertext = Buffer.concat(chunks, totalBytes);
 
