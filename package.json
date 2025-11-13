@@ -1,10 +1,11 @@
 {
   "name": "media-server",
   "version": "1.0.0",
-  "description": "",
+  "description": "This project demonstrates a **Proof of Concept (PoC)** for secure local file transfer between two clients through a **media server**, all running on the same WiFi network. It includes compression, AES encryption, key exchange, and decryption of files.",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "node server.js"
   },
   "keywords": [],
   "author": "",
@@ -17,5 +18,13 @@
     "form-data": "^4.0.4",
     "multer": "^2.0.2",
     "sharp": "^0.34.5"
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/anvita-katipelly/POC_E2EE.git"
+  },
+  "bugs": {
+    "url": "https://github.com/anvita-katipelly/POC_E2EE/issues"
+  },
+  "homepage": "https://github.com/anvita-katipelly/POC_E2EE#readme"
 }
