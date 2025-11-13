@@ -1,1 +1,25 @@
 node_modules/
+
+# Data directories
+data/
+uploads/
+decrypted/
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Environment
+.env
+.env.local

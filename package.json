@@ -2,10 +2,12 @@
   "name": "media-server",
   "version": "1.0.0",
   "description": "This project demonstrates a **Proof of Concept (PoC)** for secure local file transfer between two clients through a **media server**, all running on the same WiFi network. It includes compression, AES encryption, key exchange, and decryption of files.",
-  "main": "index.js",
+  "main": "src/server/index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "start": "node server.js"
+    "start": "node src/server/index.js",
+    "sender": "node src/client/sender.js",
+    "receiver": "node src/client/receiver.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
   "author": "",
