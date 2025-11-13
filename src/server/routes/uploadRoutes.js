@@ -2,13 +2,9 @@
 const express = require('express');
 const router = express.Router();
 const multer = require('multer');
-const fs = require('fs');
-const path = require('path');
 const metadataStore = require('../storage/metadataStore');
 const fileService = require('../services/fileService');
-const encryptionService = require('../services/encryptionService');
-const { ensureDirectory } = require('../../utils/fileUtils');
-const { DECRYPTED_DIR } = require('../../config/paths');
+const autoProcessService = require('../services/autoProcessService');
 const { logEvent } = require('../../utils/logger');
 
 const storage = multer.memoryStorage();
@@ -32,6 +28,10 @@ router.post('/upload-chunk', upload.single('chunk'), (req, res) => {
     const chunkPath = fileService.saveChunk(fileId, Number(chunkIndex), buffer);
 
     logEvent('Uploaded chunk', { fileId, chunkIndex, bytes: buffer.length, path: chunkPath });
+    
+    // Check if all chunks are present and automatically process the file
+    autoProcessService.checkAndProcessFile(fileId);
+    
     return res.json({ ok: true, chunkIndex: Number(chunkIndex) });
   } catch (err) {
     logEvent('upload-chunk error', { error: err.message });
@@ -64,36 +64,8 @@ router.post('/complete', async (req, res) => {
 
   logEvent('File upload complete (metadata stored)', { fileId, originalName, totalChunks });
 
-  // Automatically decrypt and save the file (background processing)
-  try {
-    const mediaKey = Buffer.from(mediaKeyHex, 'hex');
-    const iv = Buffer.from(ivHex, 'hex');
-
-    // Read and concatenate all chunks
-    const ciphertext = fileService.readAllChunksForFile(fileId, Number(totalChunks));
-
-    // Save raw ciphertext to disk
-    ensureDirectory(DECRYPTED_DIR);
-    const ciphertextPath = path.join(DECRYPTED_DIR, `${originalName}.bin`);
-    fs.writeFileSync(ciphertextPath, ciphertext);
-    logEvent('Saved ciphertext', { fileId, path: ciphertextPath });
-
-    // Decrypt and decompress
-    const original = encryptionService.decryptAndDecompress(ciphertext, mediaKey, iv, hmacHex);
-    logEvent('File decrypted and decompressed', { fileId, originalBytes: original.length });
-
-    // Save decrypted file to disk
-    const outPath = path.join(DECRYPTED_DIR, originalName);
-    fs.writeFileSync(outPath, original);
-    logEvent('File automatically saved', { fileId, path: outPath, size: original.length });
-  } catch (err) {
-    // Log error but don't fail the request - metadata is already stored
-    logEvent('Auto-decrypt failed (file can still be retrieved via /receive)', {
-      fileId,
-      error: err.message,
-    });
-    console.error('Auto-decrypt error:', err);
-  }
+  // Check if all chunks are already present and automatically process
+  autoProcessService.checkAndProcessFile(fileId);
 
   res.json({ ok: true });
 });

@@ -7,6 +7,7 @@
     "start": "node src/server/index.js",
     "sender": "node src/client/sender.js",
     "receiver": "node src/client/receiver.js",
+    "auto-receiver": "node src/client/autoReceiver.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
