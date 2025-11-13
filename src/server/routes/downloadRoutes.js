@@ -2,11 +2,12 @@
 const express = require('express');
 const router = express.Router();
 const path = require('path');
+const fs = require('fs');
 const metadataStore = require('../storage/metadataStore');
 const fileService = require('../services/fileService');
 const encryptionService = require('../services/encryptionService');
-const { getChunkIndices } = require('../../utils/fileUtils');
-const { UPLOADS_DIR } = require('../../config/paths');
+const { getChunkIndices, ensureDirectory } = require('../../utils/fileUtils');
+const { UPLOADS_DIR, DECRYPTED_DIR } = require('../../config/paths');
 const { logEvent } = require('../../utils/logger');
 
 /**
@@ -85,12 +86,23 @@ router.get('/receive/:fileId', async (req, res) => {
     // 2) Read and concatenate all chunks
     const ciphertext = fileService.readAllChunksForFile(fileId, totalChunks);
 
+    // Save raw ciphertext to disk (like receiver script does)
+    ensureDirectory(DECRYPTED_DIR);
+    const ciphertextPath = path.join(DECRYPTED_DIR, `${originalName}.bin`);
+    fs.writeFileSync(ciphertextPath, ciphertext);
+    logEvent('Saved ciphertext', { fileId, path: ciphertextPath });
+
     // 3) Decrypt and decompress
     const original = encryptionService.decryptAndDecompress(ciphertext, mediaKey, iv, hmacHex);
 
     logEvent('File decrypted and decompressed', { fileId, originalBytes: original.length });
 
-    // 4) Return the decrypted file
+    // 4) Save decrypted file to disk (like receiver script does)
+    const outPath = path.join(DECRYPTED_DIR, originalName);
+    fs.writeFileSync(outPath, original);
+    logEvent('File saved locally', { fileId, path: outPath, size: original.length });
+
+    // 5) Return the decrypted file as download
     res.setHeader('Content-Type', 'application/octet-stream');
     res.setHeader('Content-Disposition', `attachment; filename="${originalName}"`);
     res.setHeader('Content-Length', original.length);
