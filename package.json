@@ -10,6 +10,7 @@
     "auto-receiver": "node src/client/autoReceiver.js",
     "send-message": "node src/client/messageSender.js",
     "receive-message": "node src/client/messageReceiver.js",
+    "chat": "node src/client/websocketClient.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
@@ -22,7 +23,8 @@
     "express": "^5.1.0",
     "form-data": "^4.0.4",
     "multer": "^2.0.2",
-    "sharp": "^0.34.5"
+    "sharp": "^0.34.5",
+    "socket.io": "^4.8.1"
   },
   "repository": {
     "type": "git",
