@@ -5,6 +5,7 @@ const encryptionService = require('./encryptionService');
 const metadataStore = require('../storage/metadataStore');
 const { generateMediaKey, generateIV } = require('../../utils/crypto');
 const { logEvent } = require('../../utils/logger');
+const { WEBSOCKET } = require('../../config/constants');
 
 // Message store for offline messages (phoneNumber -> messages[])
 const offlineMessages = new Map();
@@ -20,6 +21,13 @@ function initializeWebSocket(httpServer) {
       origin: '*',
       methods: ['GET', 'POST'],
     },
+    pingTimeout: WEBSOCKET.PING_TIMEOUT,
+    pingInterval: WEBSOCKET.PING_INTERVAL,
+    maxHttpBufferSize: WEBSOCKET.MAX_HTTP_BUFFER_SIZE,
+    connectTimeout: WEBSOCKET.CONNECT_TIMEOUT,
+    transports: ['websocket', 'polling'], // Prefer WebSocket
+    perMessageDeflate: false, // Disable compression for better performance at scale
+
   });
 
   io.on('connection', (socket) => {
@@ -29,7 +37,7 @@ function initializeWebSocket(httpServer) {
     socket.on('register', (data) => {
       try {
         const { phoneNumber } = data;
-        
+
         if (!phoneNumber || typeof phoneNumber !== 'string') {
           socket.emit('error', { message: 'phoneNumber is required' });
           return;
@@ -117,18 +125,18 @@ function initializeWebSocket(httpServer) {
 
         // Check if recipient is online
         const recipientSocketId = peerStore.getSocketId(to);
-        
+
         if (recipientSocketId) {
           // Send to online peer
           io.to(recipientSocketId).emit('message', payload);
-          
+
           socket.emit('message-sent', {
             type: 'text',
             messageId: payload.messageId,
             to,
             timestamp: payload.timestamp,
           });
-          
+
           logEvent('Message delivered', { from, to, messageId: payload.messageId });
         } else {
           // Store for offline delivery
@@ -136,7 +144,7 @@ function initializeWebSocket(httpServer) {
             offlineMessages.set(to, []);
           }
           offlineMessages.get(to).push(payload);
-          
+
           socket.emit('message-sent', {
             type: 'text',
             messageId: payload.messageId,
@@ -144,7 +152,7 @@ function initializeWebSocket(httpServer) {
             timestamp: payload.timestamp,
             status: 'offline',
           });
-          
+
           logEvent('Message queued (recipient offline)', { from, to, messageId: payload.messageId });
         }
       } catch (err) {
@@ -227,7 +235,7 @@ function initializeWebSocket(httpServer) {
       const { phoneNumber } = data;
       const isOnline = peerStore.isOnline(phoneNumber);
       const peer = peerStore.getPeer(phoneNumber);
-      
+
       socket.emit('peer-status', {
         phoneNumber,
         isOnline,
@@ -241,7 +249,7 @@ function initializeWebSocket(httpServer) {
       if (phoneNumber) {
         peerStore.unregister(socket.id);
         logEvent('Peer disconnected', { phoneNumber, socketId: socket.id });
-        
+
         // Notify other peers
         socket.broadcast.emit('peer-offline', { phoneNumber });
       } else {
