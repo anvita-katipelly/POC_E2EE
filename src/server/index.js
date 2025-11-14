@@ -11,6 +11,10 @@ const HOST = SERVER.HOST;
 // Create HTTP server
 const httpServer = http.createServer(app);
 
+
+httpServer.maxConnections = SERVER.MAX_CONNECTIONS;
+httpServer.keepAliveTimeout = SERVER.KEEP_ALIVE_TIMEOUT;
+httpServer.headersTimeout = SERVER.HEADERS_TIMEOUT;
 // Initialize WebSocket
 const io = initializeWebSocket(httpServer);
 
