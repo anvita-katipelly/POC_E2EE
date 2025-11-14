@@ -2,6 +2,7 @@
 const { Server } = require('socket.io');
 const peerStore = require('../storage/peerStore');
 const encryptionService = require('./encryptionService');
+const metadataStore = require('../storage/metadataStore');
 const { generateMediaKey, generateIV } = require('../../utils/crypto');
 const { logEvent } = require('../../utils/logger');
 
@@ -92,7 +93,8 @@ function initializeWebSocket(httpServer) {
           iv
         );
 
-        const messageData = {
+        const payload = {
+          type: 'text',
           from,
           to,
           message,
@@ -109,7 +111,7 @@ function initializeWebSocket(httpServer) {
         logEvent('Message sent', {
           from,
           to,
-          messageId: messageData.messageId,
+          messageId: payload.messageId,
           messageLength: message.length,
         });
 
@@ -118,37 +120,99 @@ function initializeWebSocket(httpServer) {
         
         if (recipientSocketId) {
           // Send to online peer
-          io.to(recipientSocketId).emit('message', {
-            ...messageData,
-            encrypted: undefined, // Don't send encrypted data to recipient, send plaintext
-          });
+          io.to(recipientSocketId).emit('message', payload);
           
           socket.emit('message-sent', {
-            messageId: messageData.messageId,
+            type: 'text',
+            messageId: payload.messageId,
             to,
-            timestamp: messageData.timestamp,
+            timestamp: payload.timestamp,
           });
           
-          logEvent('Message delivered', { from, to, messageId: messageData.messageId });
+          logEvent('Message delivered', { from, to, messageId: payload.messageId });
         } else {
           // Store for offline delivery
           if (!offlineMessages.has(to)) {
             offlineMessages.set(to, []);
           }
-          offlineMessages.get(to).push(messageData);
+          offlineMessages.get(to).push(payload);
           
           socket.emit('message-sent', {
-            messageId: messageData.messageId,
+            type: 'text',
+            messageId: payload.messageId,
             to,
-            timestamp: messageData.timestamp,
+            timestamp: payload.timestamp,
             status: 'offline',
           });
           
-          logEvent('Message queued (recipient offline)', { from, to, messageId: messageData.messageId });
+          logEvent('Message queued (recipient offline)', { from, to, messageId: payload.messageId });
         }
       } catch (err) {
         logEvent('Send message error', { error: err.message, socketId: socket.id });
         socket.emit('error', { message: 'Failed to send message', error: err.message });
+      }
+    });
+
+    socket.on('send-file', async (data) => {
+      try {
+        const { to, fileId, originalName, totalChunks } = data;
+        const from = peerStore.getPhoneNumber(socket.id);
+
+        if (!from) {
+          socket.emit('error', { message: 'Not registered. Please register first.' });
+          return;
+        }
+
+        if (!to || !fileId) {
+          socket.emit('error', { message: 'to and fileId are required' });
+          return;
+        }
+
+        const meta = metadataStore.get(fileId);
+        if (!meta) {
+          socket.emit('error', { message: `File metadata not found for ${fileId}` });
+          return;
+        }
+
+        const payload = {
+          type: 'file',
+          from,
+          to,
+          fileId,
+          originalName: originalName || meta.originalName,
+          totalChunks: totalChunks || meta.totalChunks,
+          timestamp: new Date().toISOString(),
+          messageId: `file_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        };
+
+        const recipientSocketId = peerStore.getSocketId(to);
+
+        if (recipientSocketId) {
+          io.to(recipientSocketId).emit('message', payload);
+          socket.emit('message-sent', {
+            type: 'file',
+            messageId: payload.messageId,
+            to,
+            timestamp: payload.timestamp,
+          });
+          logEvent('File notification delivered', { from, to, fileId, messageId: payload.messageId });
+        } else {
+          if (!offlineMessages.has(to)) {
+            offlineMessages.set(to, []);
+          }
+          offlineMessages.get(to).push(payload);
+          socket.emit('message-sent', {
+            type: 'file',
+            messageId: payload.messageId,
+            to,
+            timestamp: payload.timestamp,
+            status: 'offline',
+          });
+          logEvent('File notification queued (recipient offline)', { from, to, fileId, messageId: payload.messageId });
+        }
+      } catch (err) {
+        logEvent('Send file error', { error: err.message, socketId: socket.id });
+        socket.emit('error', { message: 'Failed to send file notification', error: err.message });
       }
     });
 

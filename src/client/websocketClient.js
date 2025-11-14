@@ -4,6 +4,9 @@
 
 const io = require('socket.io-client');
 const readline = require('readline');
+const { uploadFile } = require('./lib/uploadFile');
+const { downloadFile } = require('./lib/downloadFile');
+const { log } = require('../utils/logger');
 
 const SERVER = process.argv[2] || 'http://localhost:3000';
 const PHONE_NUMBER = process.argv[3];
@@ -38,6 +41,7 @@ socket.on('registered', (data) => {
   console.log(`✓ Registered as ${data.phoneNumber}`);
   console.log('\nCommands:');
   console.log('  send <phoneNumber> <message>  - Send a message');
+  console.log('  sendfile <phoneNumber> <path> - Upload & notify file');
   console.log('  peers                          - List online peers');
   console.log('  status <phoneNumber>           - Check peer status');
   console.log('  quit                           - Exit\n');
@@ -45,25 +49,37 @@ socket.on('registered', (data) => {
 });
 
 socket.on('message', (data) => {
+  if (data.type === 'file') {
+    return handleIncomingFile(data);
+  }
+
   console.log(`\n📨 Message from ${data.from}:`);
   console.log(`   ${data.message}`);
   console.log(`   [${new Date(data.timestamp).toLocaleString()}]\n`);
   promptUser();
 });
 
-socket.on('offline-messages', (data) => {
+socket.on('offline-messages', async (data) => {
   console.log(`\n📬 You have ${data.messages.length} offline message(s):\n`);
-  data.messages.forEach((msg) => {
-    console.log(`From ${msg.from}: ${msg.message}`);
-    console.log(`[${new Date(msg.timestamp).toLocaleString()}]\n`);
-  });
+  for (const msg of data.messages) {
+    if (msg.type === 'file') {
+      await handleIncomingFile(msg, { isOffline: true, suppressPrompt: true });
+    } else {
+      console.log(`From ${msg.from}: ${msg.message}`);
+      console.log(`[${new Date(msg.timestamp).toLocaleString()}]\n`);
+    }
+  }
   promptUser();
 });
 
 socket.on('message-sent', (data) => {
-  console.log(`✓ Message sent to ${data.to} (ID: ${data.messageId})`);
+  if (data.type === 'file') {
+    console.log(`✓ File notification sent to ${data.to} (ID: ${data.messageId})`);
+  } else {
+    console.log(`✓ Message sent to ${data.to} (ID: ${data.messageId})`);
+  }
   if (data.status === 'offline') {
-    console.log('  (Recipient is offline, message will be delivered when they come online)');
+    console.log('  (Recipient is offline, delivery will occur when they come online)');
   }
   promptUser();
 });
@@ -118,20 +134,37 @@ socket.on('connect_error', (error) => {
 });
 
 function promptUser() {
-  rl.question('> ', (input) => {
-    const [command, ...args] = input.trim().split(' ');
+  rl.question('> ', async (input) => {
+    const trimmed = input.trim();
+    if (!trimmed) {
+      return promptUser();
+    }
 
-    switch (command.toLowerCase()) {
-      case 'send':
+    const [command, ...args] = trimmed.split(' ');
+    const action = command.toLowerCase();
+
+    switch (action) {
+      case 'send': {
         if (args.length < 2) {
           console.log('Usage: send <phoneNumber> <message>');
-          promptUser();
-          return;
+          return promptUser();
         }
         const to = args[0];
         const message = args.slice(1).join(' ');
         socket.emit('send-message', { to, message });
         break;
+      }
+
+      case 'sendfile': {
+        if (args.length < 2) {
+          console.log('Usage: sendfile <phoneNumber> <path>');
+          return promptUser();
+        }
+        const to = args[0];
+        const filePath = args.slice(1).join(' ');
+        await handleSendFile(to, filePath);
+        break;
+      }
 
       case 'peers':
         socket.emit('get-online-peers');
@@ -140,8 +173,7 @@ function promptUser() {
       case 'status':
         if (args.length < 1) {
           console.log('Usage: status <phoneNumber>');
-          promptUser();
-          return;
+          return promptUser();
         }
         socket.emit('get-peer-status', { phoneNumber: args[0] });
         break;
@@ -161,6 +193,40 @@ function promptUser() {
         promptUser();
     }
   });
+}
+
+async function handleSendFile(to, filePath) {
+  try {
+    console.log(`\n⬆️  Uploading "${filePath}"...`);
+    const result = await uploadFile(SERVER, filePath, { log });
+    console.log(`Upload complete. Notifying ${to} with fileId ${result.fileId}`);
+    socket.emit('send-file', {
+      to,
+      fileId: result.fileId,
+      originalName: result.fileName,
+      totalChunks: result.totalChunks,
+    });
+  } catch (err) {
+    console.error(`File upload failed: ${err.message}`);
+    promptUser();
+  }
+}
+
+async function handleIncomingFile(data, options = {}) {
+  const { isOffline = false, suppressPrompt = false } = options;
+  console.log(`\n📁 File shared by ${data.from || 'unknown'}: ${data.originalName || data.fileId}`);
+  console.log(`   File ID: ${data.fileId}`);
+  console.log(`   ${isOffline ? '(Offline message)' : 'Auto-downloading...'}`);
+  try {
+    const result = await downloadFile(SERVER, data.fileId, { log });
+    console.log(`✓ File downloaded to ${result.outputPath}`);
+  } catch (err) {
+    console.error(`Failed to download file ${data.fileId}: ${err.message}`);
+  } finally {
+    if (!suppressPrompt) {
+      promptUser();
+    }
+  }
 }
 
 // Handle graceful shutdown
