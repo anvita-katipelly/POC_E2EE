@@ -1,22 +1,32 @@
 import { Platform } from 'react-native';
 
+const LOCAL_NETWORK_URL = 'http://192.168.61.42:3000';
+const LOCALHOST_URL = 'http://localhost:3000';
+
+const getEnvUrl = () => {
+  if (typeof process !== 'undefined' && process.env?.EXPO_PUBLIC_SERVER_URL) {
+    return process.env.EXPO_PUBLIC_SERVER_URL;
+  }
+  return null;
+};
+
 // Get the correct server URL based on platform
 const getServerUrl = (): string => {
-  if (__DEV__) {
-    // For Android emulator, use 10.0.2.2 to access host machine's localhost
-    // For Android physical device, use your computer's IP address on the same network
-    // For iOS simulator, localhost works fine
-    if (Platform.OS === 'android') {
-      // Use 10.0.2.2 for Android emulator, or replace with your machine's IP for physical device
-      // To find your IP: On Mac/Linux: `ifconfig | grep "inet "`, On Windows: `ipconfig`
-      return 'http://10.0.2.2:3000'; // Android emulator
-      // For physical Android device, uncomment and replace with your IP:
-      // return 'http://YOUR_COMPUTER_IP:3000';
-    }
-    return 'http://localhost:3000'; // iOS simulator
+  const envUrl = getEnvUrl();
+  if (envUrl) {
+    return envUrl;
   }
-  // Production URL
-  return 'http://localhost:3000';
+
+  // During development prefer the local network IP so physical devices can connect.
+  if (__DEV__) {
+    return LOCAL_NETWORK_URL;
+  }
+
+  // Production default - update when deploying the backend.
+  if (Platform.OS === 'ios') {
+    return LOCAL_NETWORK_URL;
+  }
+  return LOCALHOST_URL;
 };
 
 // Server configuration

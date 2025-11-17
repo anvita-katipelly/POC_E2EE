@@ -12,6 +12,7 @@ import {
   ActivityIndicator,
   Modal,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import socketService from '../services/socketService';
 import { downloadFile } from '../services/fileService';
 import { Message, SocketMessage, Peer } from '../types';
@@ -218,11 +219,12 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ navigation }) => {
   };
 
   return (
-    <KeyboardAvoidingView
-      style={styles.container}
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-    >
-      <View style={styles.header}>
+    <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
+      <KeyboardAvoidingView
+        style={styles.keyboardView}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      >
+        <View style={styles.header}>
         <Text style={styles.headerTitle}>
           Chat - {socketService.getPhoneNumber()}
         </Text>
@@ -330,7 +332,8 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ navigation }) => {
           )}
         </TouchableOpacity>
       </View>
-    </KeyboardAvoidingView>
+      </KeyboardAvoidingView>
+    </SafeAreaView>
   );
 };
 
@@ -338,6 +341,9 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#f5f5f5',
+  },
+  keyboardView: {
+    flex: 1,
   },
   header: {
     backgroundColor: '#007AFF',
