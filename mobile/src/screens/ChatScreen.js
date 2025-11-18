@@ -9,16 +9,41 @@ import {
   KeyboardAvoidingView,
   Platform,
   Alert,
+  ActivityIndicator,
 } from 'react-native';
 import socketService from '../services/socketService';
+import messageStorage from '../services/messageStorage';
 import { COLORS, STYLES } from '../config/config';
+
+// Helper to generate unique IDs
+const generateUniqueId = () => {
+  return `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+};
 
 const ChatScreen = ({ navigation, route }) => {
   const { peerPhone, myPhone } = route.params || {};
   const [messages, setMessages] = useState([]);
   const [inputText, setInputText] = useState('');
   const [isSending, setIsSending] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
   const flatListRef = useRef(null);
+  const conversationId = messageStorage.getConversationId(myPhone, peerPhone);
+
+  useEffect(() => {
+    // Load messages from storage
+    const loadMessages = async () => {
+      try {
+        const storedMessages = await messageStorage.getMessages(conversationId);
+        setMessages(storedMessages);
+      } catch (error) {
+        console.error('[ChatScreen] Error loading messages:', error);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    loadMessages();
+  }, [conversationId]);
 
   useEffect(() => {
     // Set navigation header
@@ -28,19 +53,21 @@ const ChatScreen = ({ navigation, route }) => {
     });
 
     // Listen for incoming messages
-    const handleMessage = (data) => {
+    const handleMessage = async (data) => {
       if (data.from === peerPhone && data.type === 'text') {
-        setMessages((prevMessages) => [
-          ...prevMessages,
-          {
-            id: data.messageId || `msg_${Date.now()}`,
-            text: data.message,
-            from: data.from,
-            to: data.to,
-            timestamp: data.timestamp,
-            isSent: false,
-          },
-        ]);
+        const newMessage = {
+          id: data.messageId || `msg_${Date.now()}`,
+          text: data.message,
+          from: data.from,
+          to: data.to,
+          timestamp: data.timestamp,
+          isSent: false,
+        };
+
+        setMessages((prevMessages) => [...prevMessages, newMessage]);
+
+        // Save to storage
+        await messageStorage.addMessage(conversationId, newMessage);
 
         // Scroll to bottom
         setTimeout(() => {
@@ -49,32 +76,35 @@ const ChatScreen = ({ navigation, route }) => {
       }
     };
 
-    const handleMessageSent = (data) => {
+    const handleMessageSent = async (data) => {
       if (data.to === peerPhone) {
         setIsSending(false);
         // Find the message and update its status
         setMessages((prevMessages) => {
           const lastMessage = prevMessages[prevMessages.length - 1];
           if (lastMessage && lastMessage.isSent && !lastMessage.messageId) {
-            return prevMessages.map((msg, index) =>
+            const updatedMessages = prevMessages.map((msg, index) =>
               index === prevMessages.length - 1
                 ? { ...msg, messageId: data.messageId, status: data.status || 'sent' }
                 : msg
             );
+            // Save updated messages to storage
+            messageStorage.saveMessages(conversationId, updatedMessages);
+            return updatedMessages;
           }
           return prevMessages;
         });
       }
     };
 
-    const handleOfflineMessages = ({ messages: offlineMsgs }) => {
+    const handleOfflineMessages = async ({ messages: offlineMsgs }) => {
       const relevantMessages = offlineMsgs.filter(
         (msg) => msg.from === peerPhone && msg.type === 'text'
       );
 
       if (relevantMessages.length > 0) {
         const formattedMessages = relevantMessages.map((msg) => ({
-          id: msg.messageId || `msg_${Date.now()}_${Math.random()}`,
+          id: msg.messageId || generateUniqueId(),
           text: msg.message,
           from: msg.from,
           to: msg.to,
@@ -83,6 +113,11 @@ const ChatScreen = ({ navigation, route }) => {
         }));
 
         setMessages((prevMessages) => [...prevMessages, ...formattedMessages]);
+
+        // Save all offline messages to storage
+        for (const msg of formattedMessages) {
+          await messageStorage.addMessage(conversationId, msg);
+        }
 
         setTimeout(() => {
           flatListRef.current?.scrollToEnd({ animated: true });
@@ -106,29 +141,32 @@ const ChatScreen = ({ navigation, route }) => {
       socketService.off('offline-messages', handleOfflineMessages);
       socketService.off('error', handleError);
     };
-  }, [peerPhone, navigation]);
+  }, [peerPhone, navigation, conversationId]);
 
-  const handleSend = () => {
+  const handleSend = async () => {
     const trimmedText = inputText.trim();
     if (!trimmedText || isSending) {
       return;
     }
 
+    const tempMessage = {
+      id: generateUniqueId(),
+      text: trimmedText,
+      from: myPhone,
+      to: peerPhone,
+      timestamp: new Date().toISOString(),
+      isSent: true,
+      messageId: null,
+    };
+
     try {
       // Add message to local state immediately (optimistic update)
-      const tempMessage = {
-        id: `temp_${Date.now()}`,
-        text: trimmedText,
-        from: myPhone,
-        to: peerPhone,
-        timestamp: new Date().toISOString(),
-        isSent: true,
-        messageId: null,
-      };
-
       setMessages((prevMessages) => [...prevMessages, tempMessage]);
       setInputText('');
       setIsSending(true);
+
+      // Save to storage
+      await messageStorage.addMessage(conversationId, tempMessage);
 
       // Scroll to bottom
       setTimeout(() => {
@@ -214,6 +252,15 @@ const ChatScreen = ({ navigation, route }) => {
     );
   };
 
+  if (isLoading) {
+    return (
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator size="large" color={COLORS.primary} />
+        <Text style={styles.loadingText}>Loading messages...</Text>
+      </View>
+    );
+  }
+
   return (
     <KeyboardAvoidingView
       style={styles.container}
@@ -256,6 +303,17 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: COLORS.background,
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: COLORS.background,
+  },
+  loadingText: {
+    marginTop: STYLES.spacing.md,
+    fontSize: 16,
+    color: COLORS.textSecondary,
   },
   messagesList: {
     padding: STYLES.spacing.md,
@@ -341,4 +399,3 @@ const styles = StyleSheet.create({
 });
 
 export default ChatScreen;
-

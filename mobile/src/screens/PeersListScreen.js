@@ -10,13 +10,43 @@ import {
   Alert,
 } from 'react-native';
 import socketService from '../services/socketService';
+import messageStorage from '../services/messageStorage';
 import { COLORS, STYLES } from '../config/config';
 
 const PeersListScreen = ({ navigation, route }) => {
   const { phoneNumber } = route.params || {};
   const [peers, setPeers] = useState([]);
+  const [conversations, setConversations] = useState({});
   const [isLoading, setIsLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+
+  useEffect(() => {
+    // Load conversation metadata for all peers
+    const loadConversations = async () => {
+      const allConversations = await messageStorage.getConversations();
+      const conversationsMap = {};
+      allConversations.forEach((conv) => {
+        conversationsMap[conv.id] = conv;
+      });
+      setConversations(conversationsMap);
+    };
+
+    loadConversations();
+  }, []);
+
+  useEffect(() => {
+    // Reload conversations when screen comes into focus
+    const unsubscribe = navigation.addListener('focus', async () => {
+      const allConversations = await messageStorage.getConversations();
+      const conversationsMap = {};
+      allConversations.forEach((conv) => {
+        conversationsMap[conv.id] = conv;
+      });
+      setConversations(conversationsMap);
+    });
+
+    return unsubscribe;
+  }, [navigation]);
 
   useEffect(() => {
     // Request online peers when screen mounts
@@ -106,8 +136,46 @@ const PeersListScreen = ({ navigation, route }) => {
     );
   };
 
+  const formatTime = (timestamp) => {
+    try {
+      const date = new Date(timestamp);
+      const now = new Date();
+      const diff = now - date;
+
+      // If less than 1 minute ago
+      if (diff < 60000) {
+        return 'Just now';
+      }
+
+      // If today
+      if (date.toDateString() === now.toDateString()) {
+        return date.toLocaleTimeString('en-US', {
+          hour: 'numeric',
+          minute: '2-digit',
+        });
+      }
+
+      // If yesterday
+      const yesterday = new Date(now);
+      yesterday.setDate(yesterday.getDate() - 1);
+      if (date.toDateString() === yesterday.toDateString()) {
+        return 'Yesterday';
+      }
+
+      // Otherwise show date
+      return date.toLocaleDateString('en-US', {
+        month: 'short',
+        day: 'numeric',
+      });
+    } catch {
+      return '';
+    }
+  };
+
   const renderPeer = ({ item }) => {
-    const connectedDate = new Date(item.connectedAt);
+    const conversationId = messageStorage.getConversationId(phoneNumber, item.phoneNumber);
+    const conversation = conversations[conversationId];
+    
     return (
       <TouchableOpacity
         style={styles.peerItem}
@@ -118,11 +186,23 @@ const PeersListScreen = ({ navigation, route }) => {
             <Text style={styles.peerPhone}>{item.phoneNumber}</Text>
             <View style={styles.onlineIndicator} />
           </View>
-          <Text style={styles.peerMeta}>
-            Connected: {connectedDate.toLocaleString()}
-          </Text>
+          {conversation?.lastMessage ? (
+            <Text style={styles.lastMessage} numberOfLines={1}>
+              {conversation.lastMessageFrom === phoneNumber ? 'You: ' : ''}
+              {conversation.lastMessage}
+            </Text>
+          ) : (
+            <Text style={styles.peerMeta}>Tap to start chatting</Text>
+          )}
         </View>
-        <Text style={styles.chevron}>›</Text>
+        <View style={styles.peerRight}>
+          {conversation?.lastMessageTimestamp && (
+            <Text style={styles.timestamp}>
+              {formatTime(conversation.lastMessageTimestamp)}
+            </Text>
+          )}
+          <Text style={styles.chevron}>›</Text>
+        </View>
       </TouchableOpacity>
     );
   };
@@ -225,6 +305,7 @@ const styles = StyleSheet.create({
   },
   peerInfo: {
     flex: 1,
+    marginRight: STYLES.spacing.sm,
   },
   peerHeader: {
     flexDirection: 'row',
@@ -246,6 +327,19 @@ const styles = StyleSheet.create({
   peerMeta: {
     fontSize: 12,
     color: COLORS.textSecondary,
+  },
+  lastMessage: {
+    fontSize: 14,
+    color: COLORS.textSecondary,
+  },
+  peerRight: {
+    alignItems: 'flex-end',
+    justifyContent: 'center',
+  },
+  timestamp: {
+    fontSize: 11,
+    color: COLORS.textSecondary,
+    marginBottom: STYLES.spacing.xs,
   },
   chevron: {
     fontSize: 24,
@@ -273,4 +367,3 @@ const styles = StyleSheet.create({
 });
 
 export default PeersListScreen;
-

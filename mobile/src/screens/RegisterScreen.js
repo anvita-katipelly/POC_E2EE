@@ -20,6 +20,7 @@ const RegisterScreen = ({ navigation }) => {
   const [isRegistering, setIsRegistering] = useState(false);
 
   useEffect(() => {
+    console.log('[RegisterScreen] Setting up event listeners');
     // Listen for connection events
     const handleConnected = () => {
       setIsConnecting(false);
@@ -36,6 +37,7 @@ const RegisterScreen = ({ navigation }) => {
     };
 
     const handleRegistered = ({ phoneNumber: registeredPhone }) => {
+      console.log('[RegisterScreen] handleRegistered called with:', registeredPhone);
       setIsRegistering(false);
       navigation.replace('PeersList', { phoneNumber: registeredPhone });
     };
@@ -85,6 +87,7 @@ const RegisterScreen = ({ navigation }) => {
     }
 
     try {
+      console.log('[RegisterScreen] Initializing socket connection to:', serverUrl);
       setIsConnecting(true);
       socketService.initialize(serverUrl);
 
@@ -97,6 +100,7 @@ const RegisterScreen = ({ navigation }) => {
         return;
       }
 
+      console.log('[RegisterScreen] Socket connected, registering with phone:', cleanedPhone);
       setIsRegistering(true);
       socketService.register(cleanedPhone);
     } catch (error) {
@@ -112,7 +116,7 @@ const RegisterScreen = ({ navigation }) => {
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
     >
       <View style={styles.content}>
-        <Text style={styles.title}>E2EE Chat</Text>
+        <Text style={styles.title}>IMPLI</Text>
         <Text style={styles.subtitle}>Enter your phone number to get started</Text>
 
         <View style={styles.inputContainer}>

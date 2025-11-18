@@ -26,6 +26,21 @@ class SocketService {
     });
 
     this.setupEventListeners();
+    this.reattachStoredListeners();
+  }
+
+  /**
+   * Reattach all stored listeners to the new socket
+   */
+  reattachStoredListeners() {
+    if (!this.socket) return;
+
+    // Reattach all previously registered listeners
+    this.listeners.forEach((callbacks, event) => {
+      callbacks.forEach((callback) => {
+        this.socket.on(event, callback);
+      });
+    });
   }
 
   /**
@@ -46,6 +61,39 @@ class SocketService {
 
     this.socket.on('connect_error', (error) => {
       this.emit('connection-error', { error: error.message });
+    });
+
+    // Listen for server response events
+    this.socket.on('registered', (data) => {
+      this.emit('registered', data);
+    });
+
+    this.socket.on('error', (data) => {
+      this.emit('error', data);
+    });
+
+    this.socket.on('online-peers', (data) => {
+      this.emit('online-peers', data);
+    });
+
+    this.socket.on('message', (data) => {
+      this.emit('message', data);
+    });
+
+    this.socket.on('message-sent', (data) => {
+      this.emit('message-sent', data);
+    });
+
+    this.socket.on('offline-messages', (data) => {
+      this.emit('offline-messages', data);
+    });
+
+    this.socket.on('peer-online', (data) => {
+      this.emit('peer-online', data);
+    });
+
+    this.socket.on('peer-offline', (data) => {
+      this.emit('peer-offline', data);
     });
   }
 
@@ -91,15 +139,16 @@ class SocketService {
    * @param {Function} callback - Callback function
    */
   on(event, callback) {
-    if (!this.socket) return;
-
-    // Store listener for cleanup
+    // Store listener for cleanup (even if socket doesn't exist yet)
     if (!this.listeners.has(event)) {
       this.listeners.set(event, []);
     }
     this.listeners.get(event).push(callback);
 
-    this.socket.on(event, callback);
+    // If socket exists, attach the listener immediately
+    if (this.socket) {
+      this.socket.on(event, callback);
+    }
   }
 
   /**
@@ -108,10 +157,8 @@ class SocketService {
    * @param {Function} callback - Callback function (optional)
    */
   off(event, callback) {
-    if (!this.socket) return;
-
     if (callback) {
-      this.socket.off(event, callback);
+      // Remove from stored listeners
       const listeners = this.listeners.get(event);
       if (listeners) {
         const index = listeners.indexOf(callback);
@@ -119,9 +166,16 @@ class SocketService {
           listeners.splice(index, 1);
         }
       }
+      // Remove from socket if it exists
+      if (this.socket) {
+        this.socket.off(event, callback);
+      }
     } else {
-      this.socket.off(event);
+      // Remove all listeners for this event
       this.listeners.delete(event);
+      if (this.socket) {
+        this.socket.off(event);
+      }
     }
   }
 
@@ -143,7 +197,7 @@ class SocketService {
       this.socket.disconnect();
       this.socket = null;
       this.isConnected = false;
-      this.listeners.clear();
+      // Don't clear listeners - they should persist for reconnection
     }
   }
 
