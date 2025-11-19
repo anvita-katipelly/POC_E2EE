@@ -60,7 +60,10 @@ const PeersListScreen = ({ navigation, route }) => {
   useEffect(() => {
     const handleNewMessage = () => {
       console.log('[PeersListScreen] New message received, reloading conversations');
-      loadConversations();
+      // Wait a bit for messageHandler to save to storage
+      setTimeout(() => {
+        loadConversations();
+      }, 300);
     };
 
     socketService.on('message', handleNewMessage);

@@ -13,7 +13,7 @@ public class MainActivity extends ReactActivity {
    */
   @Override
   protected String getMainComponentName() {
-    return "E2EE_Mobile";
+    return "IMPLI";
   }
 
   /**
