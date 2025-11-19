@@ -89,6 +89,7 @@ class MessageStorage {
    */
   async updateConversationMetadata(conversationId, lastMessage) {
     try {
+      console.log('[MessageStorage] Updating conversation metadata:', { conversationId, messageText: lastMessage.text?.substring(0, 20) });
       const conversations = await this.getConversations();
       const existingIndex = conversations.findIndex(c => c.id === conversationId);
       
@@ -100,13 +101,17 @@ class MessageStorage {
         updatedAt: new Date().toISOString(),
       };
 
+      console.log('[MessageStorage] Conversation metadata:', metadata);
+
       if (existingIndex >= 0) {
         conversations[existingIndex] = {
           ...conversations[existingIndex],
           ...metadata,
         };
+        console.log('[MessageStorage] Updated existing conversation at index:', existingIndex);
       } else {
         conversations.push(metadata);
+        console.log('[MessageStorage] Added new conversation');
       }
 
       // Sort by most recent

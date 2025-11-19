@@ -84,10 +84,17 @@ const PeersListScreen = ({ navigation, route }) => {
 
   // Load conversations helper function
   const loadConversations = useCallback(async () => {
+    console.log('[PeersListScreen] Loading conversations...');
     const allConversations = await messageStorage.getConversations();
+    console.log('[PeersListScreen] Loaded conversations:', allConversations.length);
     const conversationsMap = {};
     allConversations.forEach((conv) => {
       conversationsMap[conv.id] = conv;
+      console.log('[PeersListScreen] Conversation:', {
+        id: conv.id,
+        lastMessage: conv.lastMessage?.substring(0, 20),
+        from: conv.lastMessageFrom
+      });
     });
     setConversations(conversationsMap);
   }, []);
@@ -186,12 +193,22 @@ const PeersListScreen = ({ navigation, route }) => {
       }, 300);
     };
 
+    const handleMessageSent = () => {
+      console.log('[PeersListScreen] Message sent, reloading conversations');
+      // Wait a bit for message to be saved to storage
+      setTimeout(() => {
+        loadConversations();
+      }, 300);
+    };
+
     socketService.on('message', handleNewMessage);
     socketService.on('offline-messages', handleNewMessage);
+    socketService.on('message-sent', handleMessageSent);
 
     return () => {
       socketService.off('message', handleNewMessage);
       socketService.off('offline-messages', handleNewMessage);
+      socketService.off('message-sent', handleMessageSent);
     };
   }, [loadConversations]);
 
@@ -341,7 +358,11 @@ const PeersListScreen = ({ navigation, route }) => {
   };
 
   const renderPeer = ({ item }) => {
-    const conversationId = messageStorage.getConversationId(phoneNumber, item.phoneNumber);
+    // Normalize phone numbers for conversation ID lookup
+    const normalizedMyPhone = phoneNumber?.replace(/[\s\-()]/g, '');
+    const normalizedPeerPhone = item.phoneNumber?.replace(/[\s\-()]/g, '');
+    
+    const conversationId = messageStorage.getConversationId(normalizedMyPhone, normalizedPeerPhone);
     const conversation = conversations[conversationId];
     
     // Use name from combined list or phone number
@@ -368,7 +389,7 @@ const PeersListScreen = ({ navigation, route }) => {
           )}
           {conversation?.lastMessage ? (
             <Text style={styles.lastMessage} numberOfLines={1}>
-              {conversation.lastMessageFrom === phoneNumber ? 'You: ' : ''}
+              {conversation.lastMessageFrom === normalizedMyPhone ? 'You: ' : ''}
               {conversation.lastMessage}
             </Text>
           ) : item.isOnline ? (
