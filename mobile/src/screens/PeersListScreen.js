@@ -11,6 +11,7 @@ import {
 } from 'react-native';
 import socketService from '../services/socketService';
 import messageStorage from '../services/messageStorage';
+import messageHandler from '../services/messageHandler';
 import { COLORS, STYLES } from '../config/config';
 
 const PeersListScreen = ({ navigation, route }) => {
@@ -20,33 +21,56 @@ const PeersListScreen = ({ navigation, route }) => {
   const [isLoading, setIsLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
+  // Initialize global message handler
   useEffect(() => {
-    // Load conversation metadata for all peers
-    const loadConversations = async () => {
-      const allConversations = await messageStorage.getConversations();
-      const conversationsMap = {};
-      allConversations.forEach((conv) => {
-        conversationsMap[conv.id] = conv;
-      });
-      setConversations(conversationsMap);
-    };
+    console.log('[PeersListScreen] Initializing global message handler');
+    messageHandler.initialize(phoneNumber);
 
-    loadConversations();
+    return () => {
+      // Cleanup is handled in logout, not here
+      // because we want the handler to persist across screen changes
+    };
+  }, [phoneNumber]);
+
+  // Load conversations helper function
+  const loadConversations = useCallback(async () => {
+    const allConversations = await messageStorage.getConversations();
+    const conversationsMap = {};
+    allConversations.forEach((conv) => {
+      conversationsMap[conv.id] = conv;
+    });
+    setConversations(conversationsMap);
   }, []);
 
   useEffect(() => {
+    // Load conversation metadata for all peers
+    loadConversations();
+  }, [loadConversations]);
+
+  useEffect(() => {
     // Reload conversations when screen comes into focus
-    const unsubscribe = navigation.addListener('focus', async () => {
-      const allConversations = await messageStorage.getConversations();
-      const conversationsMap = {};
-      allConversations.forEach((conv) => {
-        conversationsMap[conv.id] = conv;
-      });
-      setConversations(conversationsMap);
+    const unsubscribe = navigation.addListener('focus', () => {
+      loadConversations();
     });
 
     return unsubscribe;
-  }, [navigation]);
+  }, [navigation, loadConversations]);
+
+  // Listen for incoming messages to update conversation list in real-time
+  useEffect(() => {
+    const handleNewMessage = () => {
+      console.log('[PeersListScreen] New message received, reloading conversations');
+      loadConversations();
+    };
+
+    socketService.on('message', handleNewMessage);
+    socketService.on('offline-messages', handleNewMessage);
+
+    return () => {
+      socketService.off('message', handleNewMessage);
+      socketService.off('offline-messages', handleNewMessage);
+    };
+  }, [loadConversations]);
 
   useEffect(() => {
     // Request online peers when screen mounts
@@ -128,6 +152,8 @@ const PeersListScreen = ({ navigation, route }) => {
           text: 'Logout',
           style: 'destructive',
           onPress: () => {
+            console.log('[PeersListScreen] Logging out, cleaning up message handler');
+            messageHandler.cleanup();
             socketService.disconnect();
             navigation.replace('Register');
           },

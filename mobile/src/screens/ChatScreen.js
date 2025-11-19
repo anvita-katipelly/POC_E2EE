@@ -52,37 +52,34 @@ const ChatScreen = ({ navigation, route }) => {
       headerBackTitle: 'Back',
     });
 
-    // Listen for incoming messages
+    // Listen for incoming messages (just to update UI, global handler saves to storage)
     const handleMessage = async (data) => {
       if (data.from === peerPhone && data.type === 'text') {
-        const newMessage = {
-          id: data.messageId || `msg_${Date.now()}`,
-          text: data.message,
-          from: data.from,
-          to: data.to,
-          timestamp: data.timestamp,
-          isSent: false,
-        };
+        console.log('[ChatScreen] Incoming message from peer, reloading from storage');
+        
+        // Wait a bit for global handler to save the message
+        setTimeout(async () => {
+          const updatedMessages = await messageStorage.getMessages(conversationId);
+          setMessages(updatedMessages);
 
-        setMessages((prevMessages) => [...prevMessages, newMessage]);
-
-        // Save to storage
-        await messageStorage.addMessage(conversationId, newMessage);
-
-        // Scroll to bottom
-        setTimeout(() => {
-          flatListRef.current?.scrollToEnd({ animated: true });
-        }, 100);
+          // Scroll to bottom
+          setTimeout(() => {
+            flatListRef.current?.scrollToEnd({ animated: true });
+          }, 100);
+        }, 200);
       }
     };
 
     const handleMessageSent = async (data) => {
+      console.log('[ChatScreen] Message sent confirmation received:', data);
       if (data.to === peerPhone) {
         setIsSending(false);
         // Find the message and update its status
         setMessages((prevMessages) => {
           const lastMessage = prevMessages[prevMessages.length - 1];
+          console.log('[ChatScreen] Last message:', lastMessage);
           if (lastMessage && lastMessage.isSent && !lastMessage.messageId) {
+            console.log('[ChatScreen] Updating message with server ID:', data.messageId);
             const updatedMessages = prevMessages.map((msg, index) =>
               index === prevMessages.length - 1
                 ? { ...msg, messageId: data.messageId, status: data.status || 'sent' }
@@ -91,6 +88,8 @@ const ChatScreen = ({ navigation, route }) => {
             // Save updated messages to storage
             messageStorage.saveMessages(conversationId, updatedMessages);
             return updatedMessages;
+          } else {
+            console.log('[ChatScreen] Not updating message - conditions not met');
           }
           return prevMessages;
         });
@@ -103,29 +102,23 @@ const ChatScreen = ({ navigation, route }) => {
       );
 
       if (relevantMessages.length > 0) {
-        const formattedMessages = relevantMessages.map((msg) => ({
-          id: msg.messageId || generateUniqueId(),
-          text: msg.message,
-          from: msg.from,
-          to: msg.to,
-          timestamp: msg.timestamp,
-          isSent: false,
-        }));
+        console.log('[ChatScreen] Offline messages received, reloading from storage');
+        
+        // Wait for global handler to save the messages
+        setTimeout(async () => {
+          const updatedMessages = await messageStorage.getMessages(conversationId);
+          setMessages(updatedMessages);
 
-        setMessages((prevMessages) => [...prevMessages, ...formattedMessages]);
-
-        // Save all offline messages to storage
-        for (const msg of formattedMessages) {
-          await messageStorage.addMessage(conversationId, msg);
-        }
-
-        setTimeout(() => {
-          flatListRef.current?.scrollToEnd({ animated: true });
-        }, 100);
+          // Scroll to bottom
+          setTimeout(() => {
+            flatListRef.current?.scrollToEnd({ animated: true });
+          }, 100);
+        }, 300);
       }
     };
 
     const handleError = ({ message }) => {
+      console.error('[ChatScreen] Socket error received:', message);
       setIsSending(false);
       Alert.alert('Error', message || 'Failed to send message');
     };
@@ -159,23 +152,38 @@ const ChatScreen = ({ navigation, route }) => {
       messageId: null,
     };
 
+    console.log('[ChatScreen] Sending message:', tempMessage.id);
+
     try {
-      // Add message to local state immediately (optimistic update)
-      setMessages((prevMessages) => [...prevMessages, tempMessage]);
+      // Check socket connection first
+      const connectionStatus = socketService.getConnectionStatus();
+      if (!connectionStatus.isConnected) {
+        console.error('[ChatScreen] Socket not connected');
+        Alert.alert('Error', 'Not connected to server. Please check your connection.');
+        return;
+      }
+
       setInputText('');
       setIsSending(true);
 
-      // Save to storage
-      await messageStorage.addMessage(conversationId, tempMessage);
+      // Add message to local state immediately (optimistic update)
+      setMessages((prevMessages) => [...prevMessages, tempMessage]);
+
+      // Send message via socket
+      console.log('[ChatScreen] Emitting send-message to socket');
+      socketService.sendMessage(peerPhone, trimmedText);
+
+      // Save to storage (async, non-blocking)
+      messageStorage.addMessage(conversationId, tempMessage).catch(err => {
+        console.error('[ChatScreen] Error saving message to storage:', err);
+      });
 
       // Scroll to bottom
       setTimeout(() => {
         flatListRef.current?.scrollToEnd({ animated: true });
       }, 100);
-
-      // Send message via socket
-      socketService.sendMessage(peerPhone, trimmedText);
     } catch (error) {
+      console.error('[ChatScreen] Error sending message:', error);
       setIsSending(false);
       Alert.alert('Error', error.message || 'Failed to send message');
       // Remove the temp message on error

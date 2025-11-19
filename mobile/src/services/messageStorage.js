@@ -13,7 +13,28 @@ class MessageStorage {
     try {
       const key = `${MESSAGES_KEY_PREFIX}${conversationId}`;
       const jsonValue = await AsyncStorage.getItem(key);
-      return jsonValue != null ? JSON.parse(jsonValue) : [];
+      const messages = jsonValue != null ? JSON.parse(jsonValue) : [];
+      
+      // Deduplicate messages based on id
+      const uniqueMessages = [];
+      const seenIds = new Set();
+      
+      for (const msg of messages) {
+        if (!seenIds.has(msg.id)) {
+          seenIds.add(msg.id);
+          uniqueMessages.push(msg);
+        } else {
+          console.log('[MessageStorage] Removing duplicate message during load:', msg.id);
+        }
+      }
+      
+      // If duplicates were found, save the cleaned version
+      if (uniqueMessages.length < messages.length) {
+        console.log(`[MessageStorage] Cleaned ${messages.length - uniqueMessages.length} duplicate(s) from storage`);
+        await this.saveMessages(conversationId, uniqueMessages);
+      }
+      
+      return uniqueMessages;
     } catch (error) {
       console.error('[MessageStorage] Error loading messages:', error);
       return [];
@@ -43,6 +64,14 @@ class MessageStorage {
   async addMessage(conversationId, message) {
     try {
       const messages = await this.getMessages(conversationId);
+      
+      // Check if message already exists (by id)
+      const messageExists = messages.some(msg => msg.id === message.id);
+      if (messageExists) {
+        console.log('[MessageStorage] Duplicate message detected, skipping:', message.id);
+        return;
+      }
+      
       const updatedMessages = [...messages, message];
       await this.saveMessages(conversationId, updatedMessages);
       
