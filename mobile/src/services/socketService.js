@@ -115,11 +115,16 @@ class SocketService {
    * @param {string} message - Message text
    */
   sendMessage(to, message) {
+    console.log('[SocketService] sendMessage called:', { to, messageLength: message?.length, isConnected: this.isConnected });
+    
     if (!this.socket || !this.isConnected) {
+      console.error('[SocketService] Cannot send - socket not connected');
       throw new Error('Socket not connected');
     }
 
+    console.log('[SocketService] Emitting send-message event');
     this.socket.emit('send-message', { to, message });
+    console.log('[SocketService] send-message event emitted successfully');
   }
 
   /**

@@ -13,6 +13,7 @@ import {
 } from 'react-native';
 import socketService from '../services/socketService';
 import messageStorage from '../services/messageStorage';
+import contactsService from '../services/contactsService';
 import { COLORS, STYLES } from '../config/config';
 
 // Helper to generate unique IDs
@@ -22,12 +23,25 @@ const generateUniqueId = () => {
 
 const ChatScreen = ({ navigation, route }) => {
   const { peerPhone, myPhone } = route.params || {};
+  
+  // Normalize phone numbers (remove spaces, dashes, etc)
+  const normalizedPeerPhone = peerPhone?.replace(/[\s\-()]/g, '') || peerPhone;
+  const normalizedMyPhone = myPhone?.replace(/[\s\-()]/g, '') || myPhone;
+  
   const [messages, setMessages] = useState([]);
   const [inputText, setInputText] = useState('');
   const [isSending, setIsSending] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const flatListRef = useRef(null);
-  const conversationId = messageStorage.getConversationId(myPhone, peerPhone);
+  const conversationId = messageStorage.getConversationId(normalizedMyPhone, normalizedPeerPhone);
+
+  console.log('[ChatScreen] Initialized with:', { 
+    originalPeerPhone: peerPhone,
+    normalizedPeerPhone,
+    originalMyPhone: myPhone,
+    normalizedMyPhone,
+    conversationId 
+  });
 
   useEffect(() => {
     // Load messages from storage
@@ -46,15 +60,17 @@ const ChatScreen = ({ navigation, route }) => {
   }, [conversationId]);
 
   useEffect(() => {
-    // Set navigation header
+    // Set navigation header with contact name if available
+    const displayName = contactsService.getDisplayName(peerPhone);
     navigation.setOptions({
-      title: peerPhone || 'Chat',
+      title: displayName || 'Chat',
       headerBackTitle: 'Back',
     });
 
     // Listen for incoming messages (just to update UI, global handler saves to storage)
     const handleMessage = async (data) => {
-      if (data.from === peerPhone && data.type === 'text') {
+      const normalizedDataFrom = data.from?.replace(/[\s\-()]/g, '');
+      if (normalizedDataFrom === normalizedPeerPhone && data.type === 'text') {
         console.log('[ChatScreen] Incoming message from peer, reloading from storage');
         
         // Wait a bit for global handler to save the message
@@ -72,7 +88,8 @@ const ChatScreen = ({ navigation, route }) => {
 
     const handleMessageSent = async (data) => {
       console.log('[ChatScreen] Message sent confirmation received:', data);
-      if (data.to === peerPhone) {
+      const normalizedDataTo = data.to?.replace(/[\s\-()]/g, '');
+      if (normalizedDataTo === normalizedPeerPhone) {
         setIsSending(false);
         // Find the message and update its status
         setMessages((prevMessages) => {
@@ -98,7 +115,10 @@ const ChatScreen = ({ navigation, route }) => {
 
     const handleOfflineMessages = async ({ messages: offlineMsgs }) => {
       const relevantMessages = offlineMsgs.filter(
-        (msg) => msg.from === peerPhone && msg.type === 'text'
+        (msg) => {
+          const normalizedMsgFrom = msg.from?.replace(/[\s\-()]/g, '');
+          return normalizedMsgFrom === normalizedPeerPhone && msg.type === 'text';
+        }
       );
 
       if (relevantMessages.length > 0) {
@@ -138,25 +158,35 @@ const ChatScreen = ({ navigation, route }) => {
 
   const handleSend = async () => {
     const trimmedText = inputText.trim();
+    console.log('[ChatScreen] handleSend called, text:', trimmedText?.substring(0, 20));
+    
     if (!trimmedText || isSending) {
+      console.log('[ChatScreen] Not sending - empty or already sending');
       return;
     }
 
     const tempMessage = {
       id: generateUniqueId(),
       text: trimmedText,
-      from: myPhone,
-      to: peerPhone,
+      from: normalizedMyPhone,
+      to: normalizedPeerPhone,
       timestamp: new Date().toISOString(),
       isSent: true,
       messageId: null,
     };
 
-    console.log('[ChatScreen] Sending message:', tempMessage.id);
+    console.log('[ChatScreen] Preparing message:', {
+      id: tempMessage.id,
+      from: normalizedMyPhone,
+      to: normalizedPeerPhone,
+      textLength: trimmedText.length
+    });
 
     try {
       // Check socket connection first
       const connectionStatus = socketService.getConnectionStatus();
+      console.log('[ChatScreen] Socket status:', connectionStatus);
+      
       if (!connectionStatus.isConnected) {
         console.error('[ChatScreen] Socket not connected');
         Alert.alert('Error', 'Not connected to server. Please check your connection.');
@@ -165,13 +195,18 @@ const ChatScreen = ({ navigation, route }) => {
 
       setInputText('');
       setIsSending(true);
+      console.log('[ChatScreen] Input cleared, sending flag set');
 
       // Add message to local state immediately (optimistic update)
-      setMessages((prevMessages) => [...prevMessages, tempMessage]);
+      setMessages((prevMessages) => {
+        console.log('[ChatScreen] Adding message to state, current count:', prevMessages.length);
+        return [...prevMessages, tempMessage];
+      });
 
       // Send message via socket
-      console.log('[ChatScreen] Emitting send-message to socket');
-      socketService.sendMessage(peerPhone, trimmedText);
+      console.log('[ChatScreen] Calling socketService.sendMessage with:', { to: normalizedPeerPhone, message: trimmedText.substring(0, 20) });
+      socketService.sendMessage(normalizedPeerPhone, trimmedText);
+      console.log('[ChatScreen] socketService.sendMessage returned');
 
       // Save to storage (async, non-blocking)
       messageStorage.addMessage(conversationId, tempMessage).catch(err => {
@@ -297,7 +332,10 @@ const ChatScreen = ({ navigation, route }) => {
         />
         <TouchableOpacity
           style={[styles.sendButton, (!inputText.trim() || isSending) && styles.sendButtonDisabled]}
-          onPress={handleSend}
+          onPress={() => {
+            console.log('[ChatScreen] Send button pressed');
+            handleSend();
+          }}
           disabled={!inputText.trim() || isSending}
         >
           <Text style={styles.sendButtonText}>Send</Text>

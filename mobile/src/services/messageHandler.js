@@ -50,6 +50,13 @@ class MessageHandler {
   }
 
   /**
+   * Normalize phone number
+   */
+  normalizePhone(phone) {
+    return phone?.replace(/[\s\-()]/g, '') || phone;
+  }
+
+  /**
    * Handle incoming message
    */
   async handleIncomingMessage(data) {
@@ -61,16 +68,21 @@ class MessageHandler {
         return;
       }
 
+      // Normalize phone numbers
+      const normalizedFrom = this.normalizePhone(data.from);
+      const normalizedTo = this.normalizePhone(data.to);
+      const normalizedCurrentUser = this.normalizePhone(this.currentUserPhone);
+
       const conversationId = messageStorage.getConversationId(
-        this.currentUserPhone,
-        data.from
+        normalizedCurrentUser,
+        normalizedFrom
       );
 
       const newMessage = {
         id: data.messageId || this.generateUniqueId(),
         text: data.message,
-        from: data.from,
-        to: data.to,
+        from: normalizedFrom,
+        to: normalizedTo,
         timestamp: data.timestamp || new Date().toISOString(),
         isSent: false,
       };
@@ -111,9 +123,12 @@ class MessageHandler {
 
       // Process messages for each sender
       for (const [senderPhone, messages] of Object.entries(messagesBySender)) {
+        const normalizedSender = this.normalizePhone(senderPhone);
+        const normalizedCurrentUser = this.normalizePhone(this.currentUserPhone);
+        
         const conversationId = messageStorage.getConversationId(
-          this.currentUserPhone,
-          senderPhone
+          normalizedCurrentUser,
+          normalizedSender
         );
 
         console.log(`[MessageHandler] Processing ${messages.length} offline messages from ${senderPhone}`);
@@ -123,8 +138,8 @@ class MessageHandler {
           const newMessage = {
             id: msg.messageId || this.generateUniqueId(),
             text: msg.message,
-            from: msg.from,
-            to: msg.to,
+            from: this.normalizePhone(msg.from),
+            to: this.normalizePhone(msg.to),
             timestamp: msg.timestamp || new Date().toISOString(),
             isSent: false,
           };

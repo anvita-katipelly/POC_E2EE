@@ -12,6 +12,7 @@ import {
 import socketService from '../services/socketService';
 import messageStorage from '../services/messageStorage';
 import messageHandler from '../services/messageHandler';
+import contactsService from '../services/contactsService';
 import { COLORS, STYLES } from '../config/config';
 
 const PeersListScreen = ({ navigation, route }) => {
@@ -20,6 +21,9 @@ const PeersListScreen = ({ navigation, route }) => {
   const [conversations, setConversations] = useState({});
   const [isLoading, setIsLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [contactsLoaded, setContactsLoaded] = useState(false);
+  const [allContacts, setAllContacts] = useState([]);
+  const [combinedList, setCombinedList] = useState([]);
 
   // Initialize global message handler
   useEffect(() => {
@@ -31,6 +35,52 @@ const PeersListScreen = ({ navigation, route }) => {
       // because we want the handler to persist across screen changes
     };
   }, [phoneNumber]);
+
+  // Load contacts from device
+  useEffect(() => {
+    const loadContacts = async () => {
+      console.log('[PeersListScreen] Loading contacts...');
+      const loaded = await contactsService.loadContacts();
+      console.log('[PeersListScreen] Contacts service loaded:', loaded);
+      setContactsLoaded(loaded);
+      
+      if (loaded) {
+        const contacts = contactsService.getAllContacts();
+        console.log('[PeersListScreen] Got contacts from service:', contacts.length);
+        
+        // Extract unique phone numbers from contacts
+        const contactsWithPhones = [];
+        contacts.forEach(contact => {
+          const displayName = contact.displayName || 
+                             contact.givenName || 
+                             contact.familyName || 
+                             'Unknown';
+          
+          if (contact.phoneNumbers && contact.phoneNumbers.length > 0) {
+            // Add each phone number as a separate entry
+            contact.phoneNumbers.forEach(phoneEntry => {
+              if (phoneEntry.number) {
+                contactsWithPhones.push({
+                  name: displayName,
+                  phoneNumber: phoneEntry.number,
+                  isContact: true,
+                });
+              }
+            });
+          }
+        });
+        
+        console.log('[PeersListScreen] Processed contacts with phones:', contactsWithPhones.length);
+        setAllContacts(contactsWithPhones);
+      } else {
+        console.log('[PeersListScreen] Failed to load contacts or permission denied');
+        // Still set contactsLoaded to true so UI doesn't keep loading
+        setContactsLoaded(true);
+      }
+    };
+
+    loadContacts();
+  }, []);
 
   // Load conversations helper function
   const loadConversations = useCallback(async () => {
@@ -46,6 +96,76 @@ const PeersListScreen = ({ navigation, route }) => {
     // Load conversation metadata for all peers
     loadConversations();
   }, [loadConversations]);
+
+  // Combine contacts and peers into a single list
+  useEffect(() => {
+    const combineContactsAndPeers = () => {
+      const combined = [];
+      const processedPhones = new Set();
+
+      // First, add all contacts and mark if they're online
+      allContacts.forEach(contact => {
+        const normalizedPhone = contactsService.normalizePhoneNumber(contact.phoneNumber);
+        
+        // Check if this contact is online (in peers list)
+        const isOnline = peers.some(peer => 
+          contactsService.phoneNumbersMatch(peer.phoneNumber, contact.phoneNumber)
+        );
+
+        combined.push({
+          name: contact.name,
+          phoneNumber: contact.phoneNumber,
+          isContact: true,
+          isOnline: isOnline,
+        });
+
+        processedPhones.add(normalizedPhone);
+        // Also add variations
+        if (normalizedPhone.length >= 10) {
+          processedPhones.add(normalizedPhone.slice(-10));
+        }
+      });
+
+      // Add peers that are not in contacts
+      peers.forEach(peer => {
+        const normalizedPeerPhone = contactsService.normalizePhoneNumber(peer.phoneNumber);
+        const last10 = normalizedPeerPhone.length >= 10 ? normalizedPeerPhone.slice(-10) : '';
+        
+        // Check if this peer is already in the combined list
+        const alreadyAdded = processedPhones.has(normalizedPeerPhone) || 
+                            (last10 && processedPhones.has(last10));
+
+        if (!alreadyAdded) {
+          combined.push({
+            name: null,
+            phoneNumber: peer.phoneNumber,
+            isContact: false,
+            isOnline: true,
+          });
+        }
+      });
+
+      // Sort: Online first, then by name/phone
+      combined.sort((a, b) => {
+        // Online contacts first
+        if (a.isOnline !== b.isOnline) {
+          return b.isOnline ? 1 : -1;
+        }
+        
+        // Then sort alphabetically by name or phone
+        const aDisplay = a.name || a.phoneNumber;
+        const bDisplay = b.name || b.phoneNumber;
+        return aDisplay.localeCompare(bDisplay);
+      });
+
+      console.log(`[PeersListScreen] Combined list: ${combined.length} items (${peers.length} online, ${allContacts.length} contacts)`);
+      setCombinedList(combined);
+    };
+
+    if (allContacts.length > 0 || peers.length > 0) {
+      combineContactsAndPeers();
+    }
+  }, [allContacts, peers]);
 
   useEffect(() => {
     // Reload conversations when screen comes into focus
@@ -138,10 +258,29 @@ const PeersListScreen = ({ navigation, route }) => {
     requestPeers();
   }, []);
 
-  const handlePeerPress = (peer) => {
+  const handlePeerPress = (item) => {
+    // Normalize phone numbers (remove spaces, dashes, parentheses)
+    const normalizedPeerPhone = item.phoneNumber?.replace(/[\s\-()]/g, '');
+    const normalizedMyPhone = phoneNumber?.replace(/[\s\-()]/g, '');
+    
+    console.log('[PeersListScreen] Peer pressed:', {
+      name: item.name,
+      originalPhoneNumber: item.phoneNumber,
+      normalizedPhoneNumber: normalizedPeerPhone,
+      isOnline: item.isOnline,
+      myPhone: normalizedMyPhone
+    });
+
+    // Only allow chat if online or has previous conversation
+    if (!item.isOnline && !conversations[messageStorage.getConversationId(normalizedMyPhone, normalizedPeerPhone)]) {
+      Alert.alert('Offline', 'This contact is not online. You can only chat with online contacts.');
+      return;
+    }
+
+    console.log('[PeersListScreen] Navigating to Chat screen');
     navigation.navigate('Chat', {
-      peerPhone: peer.phoneNumber,
-      myPhone: phoneNumber,
+      peerPhone: normalizedPeerPhone,
+      myPhone: normalizedMyPhone,
     });
   };
 
@@ -205,23 +344,37 @@ const PeersListScreen = ({ navigation, route }) => {
     const conversationId = messageStorage.getConversationId(phoneNumber, item.phoneNumber);
     const conversation = conversations[conversationId];
     
+    // Use name from combined list or phone number
+    const displayName = item.name || item.phoneNumber;
+    const hasName = item.name !== null;
+
     return (
       <TouchableOpacity
-        style={styles.peerItem}
+        style={[
+          styles.peerItem,
+          !item.isOnline && styles.peerItemOffline
+        ]}
         onPress={() => handlePeerPress(item)}
       >
         <View style={styles.peerInfo}>
           <View style={styles.peerHeader}>
-            <Text style={styles.peerPhone}>{item.phoneNumber}</Text>
-            <View style={styles.onlineIndicator} />
+            <Text style={styles.peerName}>{displayName}</Text>
+            {item.isOnline && (
+              <View style={styles.onlineIndicator} />
+            )}
           </View>
+          {hasName && (
+            <Text style={styles.peerPhone}>{item.phoneNumber}</Text>
+          )}
           {conversation?.lastMessage ? (
             <Text style={styles.lastMessage} numberOfLines={1}>
               {conversation.lastMessageFrom === phoneNumber ? 'You: ' : ''}
               {conversation.lastMessage}
             </Text>
-          ) : (
+          ) : item.isOnline ? (
             <Text style={styles.peerMeta}>Tap to start chatting</Text>
+          ) : (
+            <Text style={styles.peerMeta}>Not online</Text>
           )}
         </View>
         <View style={styles.peerRight}>
@@ -246,10 +399,22 @@ const PeersListScreen = ({ navigation, route }) => {
       );
     }
 
+    if (!contactsLoaded) {
+      return (
+        <View style={styles.emptyContainer}>
+          <ActivityIndicator size="large" color={COLORS.primary} />
+          <Text style={styles.emptyText}>Loading contacts...</Text>
+          <Text style={styles.emptySubtext}>Please grant contacts permission</Text>
+        </View>
+      );
+    }
+
     return (
       <View style={styles.emptyContainer}>
-        <Text style={styles.emptyText}>No peers online</Text>
-        <Text style={styles.emptySubtext}>Pull to refresh</Text>
+        <Text style={styles.emptyText}>No contacts found</Text>
+        <Text style={styles.emptySubtext}>
+          Add contacts to your phone to see them here
+        </Text>
       </View>
     );
   };
@@ -257,18 +422,20 @@ const PeersListScreen = ({ navigation, route }) => {
   return (
     <View style={styles.container}>
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>Online Peers</Text>
-        <Text style={styles.headerSubtitle}>You: {phoneNumber}</Text>
+        <Text style={styles.headerTitle}>Contacts</Text>
+        <Text style={styles.headerSubtitle}>
+          You: {phoneNumber} • {peers.length} online
+        </Text>
         <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
           <Text style={styles.logoutText}>Logout</Text>
         </TouchableOpacity>
       </View>
 
       <FlatList
-        data={peers}
+        data={combinedList}
         renderItem={renderPeer}
-        keyExtractor={(item) => item.phoneNumber}
-        contentContainerStyle={peers.length === 0 ? styles.emptyList : styles.list}
+        keyExtractor={(item, index) => `${item.phoneNumber}_${index}`}
+        contentContainerStyle={combinedList.length === 0 ? styles.emptyList : styles.list}
         ListEmptyComponent={renderEmpty}
         refreshControl={
           <RefreshControl
@@ -332,6 +499,9 @@ const styles = StyleSheet.create({
     shadowRadius: 2,
     elevation: 2,
   },
+  peerItemOffline: {
+    opacity: 0.6,
+  },
   peerInfo: {
     flex: 1,
     marginRight: STYLES.spacing.sm,
@@ -341,11 +511,16 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: STYLES.spacing.xs,
   },
-  peerPhone: {
+  peerName: {
     fontSize: 16,
     fontWeight: '600',
     color: COLORS.text,
     marginRight: STYLES.spacing.sm,
+  },
+  peerPhone: {
+    fontSize: 12,
+    color: COLORS.textSecondary,
+    marginBottom: STYLES.spacing.xs,
   },
   onlineIndicator: {
     width: 8,
