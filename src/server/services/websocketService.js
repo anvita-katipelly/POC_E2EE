@@ -91,37 +91,64 @@ function initializeWebSocket(httpServer) {
           return;
         }
 
-        // Encrypt the message
-        const mediaKey = generateMediaKey();
-        const iv = generateIV();
-        const messageBuffer = Buffer.from(message, 'utf8');
-        const { ciphertext, hmacHex } = encryptionService.encryptAndCompress(
-          messageBuffer,
-          mediaKey,
-          iv
-        );
+        // Check if message is already encrypted by client (E2EE)
+        const isEncrypted = typeof message === 'object' && message.encryptedData;
+        
+        let payload;
+        
+        if (isEncrypted) {
+          // Client-side encryption (E2EE) - just relay the encrypted payload
+          payload = {
+            type: 'text',
+            from,
+            to,
+            encrypted: true,
+            encryptedData: message.encryptedData,
+            mediaKey: message.mediaKey,
+            iv: message.iv,
+            hmac: message.hmac,
+            timestamp: new Date().toISOString(),
+            messageId: `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+          };
+          
+          logEvent('E2EE Message relayed', {
+            from,
+            to,
+            messageId: payload.messageId,
+          });
+        } else {
+          // Legacy: Server-side encryption for backwards compatibility
+          const mediaKey = generateMediaKey();
+          const iv = generateIV();
+          const messageBuffer = Buffer.from(message, 'utf8');
+          const { ciphertext, hmacHex } = encryptionService.encryptAndCompress(
+            messageBuffer,
+            mediaKey,
+            iv
+          );
 
-        const payload = {
-          type: 'text',
-          from,
-          to,
-          message,
-          encrypted: {
-            ciphertext: ciphertext.toString('base64'),
-            mediaKeyHex: mediaKey.toString('hex'),
-            ivHex: iv.toString('hex'),
-            hmacHex,
-          },
-          timestamp: new Date().toISOString(),
-          messageId: `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-        };
+          payload = {
+            type: 'text',
+            from,
+            to,
+            message,
+            encrypted: {
+              ciphertext: ciphertext.toString('base64'),
+              mediaKeyHex: mediaKey.toString('hex'),
+              ivHex: iv.toString('hex'),
+              hmacHex,
+            },
+            timestamp: new Date().toISOString(),
+            messageId: `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+          };
 
-        logEvent('Message sent', {
-          from,
-          to,
-          messageId: payload.messageId,
-          messageLength: message.length,
-        });
+          logEvent('Message sent (server-encrypted)', {
+            from,
+            to,
+            messageId: payload.messageId,
+            messageLength: message.length,
+          });
+        }
 
         // Check if recipient is online
         const recipientSocketId = peerStore.getSocketId(to);

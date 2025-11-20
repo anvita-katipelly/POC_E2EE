@@ -51,12 +51,22 @@ android {
     kotlinOptions {
         jvmTarget = '17'
     }
+    
+    packagingOptions {
+        // Exclude duplicate libcrypto.so from Flipper
+        pickFirst 'lib/arm64-v8a/libcrypto.so'
+        pickFirst 'lib/armeabi-v7a/libcrypto.so'
+        pickFirst 'lib/x86/libcrypto.so'
+        pickFirst 'lib/x86_64/libcrypto.so'
+    }
 }
 
 dependencies {
     // The version of react-native is set by the React Native Gradle Plugin
     implementation("com.facebook.react:react-android")
-    implementation("com.facebook.react:flipper-integration")
+    
+    // Disable Flipper to avoid libcrypto.so conflict with react-native-quick-crypto
+    // implementation("com.facebook.react:flipper-integration")
 
     // Force compatible androidx.core version
     configurations.all {

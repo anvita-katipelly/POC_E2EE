@@ -112,10 +112,16 @@ class SocketService {
   /**
    * Send a text message to a peer
    * @param {string} to - Recipient phone number
-   * @param {string} message - Message text
+   * @param {string|Object} message - Message text or encrypted payload object
    */
   sendMessage(to, message) {
-    console.log('[SocketService] sendMessage called:', { to, messageLength: message?.length, isConnected: this.isConnected });
+    const isEncrypted = typeof message === 'object' && message.encrypted;
+    console.log('[SocketService] sendMessage called:', { 
+      to, 
+      isEncrypted,
+      messageType: typeof message,
+      isConnected: this.isConnected 
+    });
     
     if (!this.socket || !this.isConnected) {
       console.error('[SocketService] Cannot send - socket not connected');

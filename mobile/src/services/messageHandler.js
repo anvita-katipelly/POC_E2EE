@@ -1,5 +1,6 @@
 import socketService from './socketService';
 import messageStorage from './messageStorage';
+import encryptionService from './encryptionService';
 
 /**
  * Global message handler service
@@ -78,9 +79,27 @@ class MessageHandler {
         normalizedFrom
       );
 
+      // Decrypt message if it's encrypted
+      let messageText = data.message;
+      if (data.encrypted && data.encryptedData) {
+        console.log('[MessageHandler] Decrypting encrypted message...');
+        try {
+          messageText = encryptionService.decryptMessage(
+            data.encryptedData,
+            data.mediaKey,
+            data.iv,
+            data.hmac
+          );
+          console.log('[MessageHandler] Message decrypted successfully');
+        } catch (decryptError) {
+          console.error('[MessageHandler] Failed to decrypt message:', decryptError);
+          messageText = '[Encrypted message - decryption failed]';
+        }
+      }
+
       const newMessage = {
         id: data.messageId || this.generateUniqueId(),
-        text: data.message,
+        text: messageText,
         from: normalizedFrom,
         to: normalizedTo,
         timestamp: data.timestamp || new Date().toISOString(),
@@ -135,9 +154,27 @@ class MessageHandler {
 
         // Save each message
         for (const msg of messages) {
+          // Decrypt message if it's encrypted
+          let messageText = msg.message;
+          if (msg.encrypted && msg.encryptedData) {
+            console.log('[MessageHandler] Decrypting encrypted offline message...');
+            try {
+              messageText = encryptionService.decryptMessage(
+                msg.encryptedData,
+                msg.mediaKey,
+                msg.iv,
+                msg.hmac
+              );
+              console.log('[MessageHandler] Offline message decrypted successfully');
+            } catch (decryptError) {
+              console.error('[MessageHandler] Failed to decrypt offline message:', decryptError);
+              messageText = '[Encrypted message - decryption failed]';
+            }
+          }
+
           const newMessage = {
             id: msg.messageId || this.generateUniqueId(),
-            text: msg.message,
+            text: messageText,
             from: this.normalizePhone(msg.from),
             to: this.normalizePhone(msg.to),
             timestamp: msg.timestamp || new Date().toISOString(),

@@ -1,3 +1,21 @@
+// Polyfills for crypto
+import 'react-native-get-random-values';
+import { Buffer } from 'buffer';
+global.Buffer = Buffer;
+
+// Add btoa and atob polyfills for base64 encoding
+if (typeof global.btoa === 'undefined') {
+  global.btoa = (str) => {
+    return Buffer.from(str, 'binary').toString('base64');
+  };
+}
+
+if (typeof global.atob === 'undefined') {
+  global.atob = (str) => {
+    return Buffer.from(str, 'base64').toString('binary');
+  };
+}
+
 import React from 'react';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';

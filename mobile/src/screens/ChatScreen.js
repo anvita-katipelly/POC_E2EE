@@ -14,6 +14,7 @@ import {
 import socketService from '../services/socketService';
 import messageStorage from '../services/messageStorage';
 import contactsService from '../services/contactsService';
+import encryptionService from '../services/encryptionService';
 import { COLORS, STYLES } from '../config/config';
 
 // Helper to generate unique IDs
@@ -203,9 +204,20 @@ const ChatScreen = ({ navigation, route }) => {
         return [...prevMessages, tempMessage];
       });
 
-      // Send message via socket
-      console.log('[ChatScreen] Calling socketService.sendMessage with:', { to: normalizedPeerPhone, message: trimmedText.substring(0, 20) });
-      socketService.sendMessage(normalizedPeerPhone, trimmedText);
+      // Encrypt message before sending
+      console.log('[ChatScreen] Encrypting message...');
+      const encryptedPayload = encryptionService.encryptMessage(trimmedText);
+      console.log('[ChatScreen] Message encrypted successfully');
+
+      // Send encrypted message via socket
+      console.log('[ChatScreen] Calling socketService.sendMessage with encrypted payload');
+      socketService.sendMessage(normalizedPeerPhone, {
+        encrypted: true,
+        encryptedData: encryptedPayload.encryptedData,
+        mediaKey: encryptedPayload.mediaKey,
+        iv: encryptedPayload.iv,
+        hmac: encryptedPayload.hmac,
+      });
       console.log('[ChatScreen] socketService.sendMessage returned');
 
       // Save to storage (async, non-blocking)
