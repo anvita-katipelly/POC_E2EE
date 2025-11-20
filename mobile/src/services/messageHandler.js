@@ -108,8 +108,8 @@ class MessageHandler {
 
       console.log('[MessageHandler] Saving message:', newMessage.id);
 
-      // Save to storage
-      await messageStorage.addMessage(conversationId, newMessage);
+      // Save to storage (unread count is handled inside addMessage)
+      await messageStorage.addMessage(conversationId, newMessage, normalizedCurrentUser);
 
       console.log('[MessageHandler] Message saved successfully');
     } catch (error) {
@@ -152,7 +152,7 @@ class MessageHandler {
 
         console.log(`[MessageHandler] Processing ${messages.length} offline messages from ${senderPhone}`);
 
-        // Save each message
+        // Save each message (unread count is handled inside addMessage)
         for (const msg of messages) {
           // Decrypt message if it's encrypted
           let messageText = msg.message;
@@ -181,7 +181,8 @@ class MessageHandler {
             isSent: false,
           };
 
-          await messageStorage.addMessage(conversationId, newMessage);
+          // addMessage will handle unread count increment automatically
+          await messageStorage.addMessage(conversationId, newMessage, normalizedCurrentUser);
         }
       }
 

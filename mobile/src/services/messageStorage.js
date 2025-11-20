@@ -60,8 +60,9 @@ class MessageStorage {
    * Add a single message to a conversation
    * @param {string} conversationId - Unique conversation ID
    * @param {Object} message - Message object to add
+   * @param {string} myPhoneNumber - Current user's phone number
    */
-  async addMessage(conversationId, message) {
+  async addMessage(conversationId, message, myPhoneNumber) {
     try {
       const messages = await this.getMessages(conversationId);
       
@@ -75,8 +76,8 @@ class MessageStorage {
       const updatedMessages = [...messages, message];
       await this.saveMessages(conversationId, updatedMessages);
       
-      // Update conversation metadata
-      await this.updateConversationMetadata(conversationId, message);
+      // Update conversation metadata (includes unread count increment)
+      await this.updateConversationMetadata(conversationId, message, myPhoneNumber);
     } catch (error) {
       console.error('[MessageStorage] Error adding message:', error);
     }
@@ -86,12 +87,22 @@ class MessageStorage {
    * Update conversation metadata (last message, timestamp, unread count)
    * @param {string} conversationId - Unique conversation ID
    * @param {Object} lastMessage - The last message in the conversation
+   * @param {string} myPhoneNumber - Current user's phone number (to check if message is from self)
    */
-  async updateConversationMetadata(conversationId, lastMessage) {
+  async updateConversationMetadata(conversationId, lastMessage, myPhoneNumber) {
     try {
       console.log('[MessageStorage] Updating conversation metadata:', { conversationId, messageText: lastMessage.text?.substring(0, 20) });
       const conversations = await this.getConversations();
       const existingIndex = conversations.findIndex(c => c.id === conversationId);
+      
+      let currentUnreadCount = 0;
+      if (existingIndex >= 0) {
+        currentUnreadCount = conversations[existingIndex].unreadCount || 0;
+      }
+      
+      // Only increment unread if message is NOT from current user
+      const isFromMe = lastMessage.from === myPhoneNumber;
+      const newUnreadCount = isFromMe ? currentUnreadCount : currentUnreadCount + 1;
       
       const metadata = {
         id: conversationId,
@@ -99,6 +110,7 @@ class MessageStorage {
         lastMessageTimestamp: lastMessage.timestamp,
         lastMessageFrom: lastMessage.from,
         updatedAt: new Date().toISOString(),
+        unreadCount: newUnreadCount,
       };
 
       console.log('[MessageStorage] Conversation metadata:', metadata);
@@ -184,6 +196,44 @@ class MessageStorage {
       await AsyncStorage.multiRemove(e2eeKeys);
     } catch (error) {
       console.error('[MessageStorage] Error clearing all data:', error);
+    }
+  }
+
+  /**
+   * Increment unread count for a conversation
+   * @param {string} conversationId - Unique conversation ID
+   */
+  async incrementUnreadCount(conversationId) {
+    try {
+      const conversations = await this.getConversations();
+      const conversation = conversations.find(c => c.id === conversationId);
+      
+      if (conversation) {
+        conversation.unreadCount = (conversation.unreadCount || 0) + 1;
+        await AsyncStorage.setItem(CONVERSATIONS_KEY, JSON.stringify(conversations));
+        console.log('[MessageStorage] Incremented unread count for:', conversationId, 'to', conversation.unreadCount);
+      }
+    } catch (error) {
+      console.error('[MessageStorage] Error incrementing unread count:', error);
+    }
+  }
+
+  /**
+   * Clear unread count for a conversation
+   * @param {string} conversationId - Unique conversation ID
+   */
+  async clearUnreadCount(conversationId) {
+    try {
+      const conversations = await this.getConversations();
+      const conversation = conversations.find(c => c.id === conversationId);
+      
+      if (conversation) {
+        conversation.unreadCount = 0;
+        await AsyncStorage.setItem(CONVERSATIONS_KEY, JSON.stringify(conversations));
+        console.log('[MessageStorage] Cleared unread count for:', conversationId);
+      }
+    } catch (error) {
+      console.error('[MessageStorage] Error clearing unread count:', error);
     }
   }
 

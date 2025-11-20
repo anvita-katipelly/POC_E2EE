@@ -45,11 +45,14 @@ const ChatScreen = ({ navigation, route }) => {
   });
 
   useEffect(() => {
-    // Load messages from storage
+    // Load messages from storage and clear unread count
     const loadMessages = async () => {
       try {
         const storedMessages = await messageStorage.getMessages(conversationId);
         setMessages(storedMessages);
+        
+        // Clear unread count when opening the chat
+        await messageStorage.clearUnreadCount(conversationId);
       } catch (error) {
         console.error('[ChatScreen] Error loading messages:', error);
       } finally {
@@ -78,6 +81,10 @@ const ChatScreen = ({ navigation, route }) => {
         setTimeout(async () => {
           const updatedMessages = await messageStorage.getMessages(conversationId);
           setMessages(updatedMessages);
+
+          // Clear unread count since chat is open and user is viewing the message
+          await messageStorage.clearUnreadCount(conversationId);
+          console.log('[ChatScreen] Cleared unread count (chat is open)');
 
           // Scroll to bottom
           setTimeout(() => {
@@ -129,6 +136,10 @@ const ChatScreen = ({ navigation, route }) => {
         setTimeout(async () => {
           const updatedMessages = await messageStorage.getMessages(conversationId);
           setMessages(updatedMessages);
+
+          // Clear unread count since chat is open and user is viewing the messages
+          await messageStorage.clearUnreadCount(conversationId);
+          console.log('[ChatScreen] Cleared unread count for offline messages (chat is open)');
 
           // Scroll to bottom
           setTimeout(() => {
@@ -221,7 +232,7 @@ const ChatScreen = ({ navigation, route }) => {
       console.log('[ChatScreen] socketService.sendMessage returned');
 
       // Save to storage (async, non-blocking)
-      messageStorage.addMessage(conversationId, tempMessage).catch(err => {
+      messageStorage.addMessage(conversationId, tempMessage, normalizedMyPhone).catch(err => {
         console.error('[ChatScreen] Error saving message to storage:', err);
       });
 

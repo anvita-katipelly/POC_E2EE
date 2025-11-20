@@ -93,7 +93,8 @@ const PeersListScreen = ({ navigation, route }) => {
       console.log('[PeersListScreen] Conversation:', {
         id: conv.id,
         lastMessage: conv.lastMessage?.substring(0, 20),
-        from: conv.lastMessageFrom
+        from: conv.lastMessageFrom,
+        unreadCount: conv.unreadCount || 0
       });
     });
     setConversations(conversationsMap);
@@ -104,7 +105,7 @@ const PeersListScreen = ({ navigation, route }) => {
     loadConversations();
   }, [loadConversations]);
 
-  // Combine contacts and peers into a single list
+  // Combine contacts, peers, and existing conversations into a single list
   useEffect(() => {
     const combineContactsAndPeers = () => {
       const combined = [];
@@ -149,34 +150,101 @@ const PeersListScreen = ({ navigation, route }) => {
             isContact: false,
             isOnline: true,
           });
+          processedPhones.add(normalizedPeerPhone);
+          if (last10) {
+            processedPhones.add(last10);
+          }
         }
       });
 
-      // Sort: Online first, then by name/phone
+      // Add people from existing conversations (even if offline and not in contacts)
+      const normalizedMyPhone = phoneNumber.replace(/[\s\-()]/g, '');
+      Object.keys(conversations).forEach(conversationId => {
+        // Extract the other person's phone number from conversation ID
+        // conversationId format: "phone1_phone2"
+        const [phone1, phone2] = conversationId.split('_');
+        const otherPhone = phone1 === normalizedMyPhone ? phone2 : phone1;
+        
+        // Check if this person is already in the combined list
+        const normalizedOtherPhone = contactsService.normalizePhoneNumber(otherPhone);
+        const last10 = normalizedOtherPhone.length >= 10 ? normalizedOtherPhone.slice(-10) : '';
+        
+        const alreadyAdded = processedPhones.has(normalizedOtherPhone) || 
+                            (last10 && processedPhones.has(last10));
+
+        if (!alreadyAdded) {
+          // Check if they're online
+          const isOnline = peers.some(peer => 
+            contactsService.phoneNumbersMatch(peer.phoneNumber, otherPhone)
+          );
+
+          // Try to get display name from contacts service
+          const displayName = contactsService.getDisplayName(otherPhone);
+          const hasName = displayName !== otherPhone;
+
+          combined.push({
+            name: hasName ? displayName : null,
+            phoneNumber: otherPhone,
+            isContact: hasName,
+            isOnline: isOnline,
+            hasConversation: true, // Flag to indicate this is from chat history
+          });
+          
+          processedPhones.add(normalizedOtherPhone);
+          if (last10) {
+            processedPhones.add(last10);
+          }
+        }
+      });
+
+      // Sort: Conversations with unread first, then online, then by name/phone
       combined.sort((a, b) => {
-        // Online contacts first
+        const normalizedMyPhone = phoneNumber.replace(/[\s\-()]/g, '');
+        const normalizedPhoneA = a.phoneNumber.replace(/[\s\-()]/g, '');
+        const normalizedPhoneB = b.phoneNumber.replace(/[\s\-()]/g, '');
+        
+        const conversationA = conversations[messageStorage.getConversationId(normalizedMyPhone, normalizedPhoneA)];
+        const conversationB = conversations[messageStorage.getConversationId(normalizedMyPhone, normalizedPhoneB)];
+        
+        const unreadA = conversationA?.unreadCount || 0;
+        const unreadB = conversationB?.unreadCount || 0;
+        
+        // Unread messages first
+        if (unreadA !== unreadB) {
+          return unreadB - unreadA;
+        }
+        
+        // Then online contacts
         if (a.isOnline !== b.isOnline) {
           return b.isOnline ? 1 : -1;
         }
         
-        // Then sort alphabetically by name or phone
+        // Then by most recent conversation
+        const timestampA = conversationA?.lastMessageTimestamp || '';
+        const timestampB = conversationB?.lastMessageTimestamp || '';
+        if (timestampA !== timestampB) {
+          return timestampB.localeCompare(timestampA);
+        }
+        
+        // Finally, sort alphabetically by name or phone
         const aDisplay = a.name || a.phoneNumber;
         const bDisplay = b.name || b.phoneNumber;
         return aDisplay.localeCompare(bDisplay);
       });
 
-      console.log(`[PeersListScreen] Combined list: ${combined.length} items (${peers.length} online, ${allContacts.length} contacts)`);
+      console.log(`[PeersListScreen] Combined list: ${combined.length} items (${peers.length} online, ${allContacts.length} contacts, ${Object.keys(conversations).length} conversations)`);
       setCombinedList(combined);
     };
 
-    if (allContacts.length > 0 || peers.length > 0) {
+    if (allContacts.length > 0 || peers.length > 0 || Object.keys(conversations).length > 0) {
       combineContactsAndPeers();
     }
-  }, [allContacts, peers]);
+  }, [allContacts, peers, conversations, phoneNumber]);
 
   useEffect(() => {
     // Reload conversations when screen comes into focus
     const unsubscribe = navigation.addListener('focus', () => {
+      console.log('[PeersListScreen] Screen focused, reloading conversations');
       loadConversations();
     });
 
@@ -280,17 +348,27 @@ const PeersListScreen = ({ navigation, route }) => {
     const normalizedPeerPhone = item.phoneNumber?.replace(/[\s\-()]/g, '');
     const normalizedMyPhone = phoneNumber?.replace(/[\s\-()]/g, '');
     
+    const conversationId = messageStorage.getConversationId(normalizedMyPhone, normalizedPeerPhone);
+    const hasConversation = conversations[conversationId] !== undefined;
+    
     console.log('[PeersListScreen] Peer pressed:', {
       name: item.name,
       originalPhoneNumber: item.phoneNumber,
       normalizedPhoneNumber: normalizedPeerPhone,
       isOnline: item.isOnline,
+      hasConversation: hasConversation,
       myPhone: normalizedMyPhone
     });
 
-    // Only allow chat if online or has previous conversation
-    if (!item.isOnline && !conversations[messageStorage.getConversationId(normalizedMyPhone, normalizedPeerPhone)]) {
-      Alert.alert('Offline', 'This contact is not online. You can only chat with online contacts.');
+    // Allow chat if:
+    // 1. User is online, OR
+    // 2. There's existing conversation history
+    if (!item.isOnline && !hasConversation) {
+      Alert.alert(
+        'Offline', 
+        'This contact is not online and you have no previous conversation. You can only start new chats with online contacts.',
+        [{ text: 'OK' }]
+      );
       return;
     }
 
@@ -379,7 +457,14 @@ const PeersListScreen = ({ navigation, route }) => {
       >
         <View style={styles.peerInfo}>
           <View style={styles.peerHeader}>
-            <Text style={styles.peerName}>{displayName}</Text>
+            <Text 
+              style={[
+                styles.peerName,
+                conversation?.unreadCount > 0 && styles.peerNameUnread
+              ]}
+            >
+              {displayName}
+            </Text>
             {item.isOnline && (
               <View style={styles.onlineIndicator} />
             )}
@@ -388,12 +473,20 @@ const PeersListScreen = ({ navigation, route }) => {
             <Text style={styles.peerPhone}>{item.phoneNumber}</Text>
           )}
           {conversation?.lastMessage ? (
-            <Text style={styles.lastMessage} numberOfLines={1}>
+            <Text 
+              style={[
+                styles.lastMessage, 
+                conversation.unreadCount > 0 && styles.lastMessageUnread
+              ]} 
+              numberOfLines={1}
+            >
               {conversation.lastMessageFrom === normalizedMyPhone ? 'You: ' : ''}
               {conversation.lastMessage}
             </Text>
           ) : item.isOnline ? (
             <Text style={styles.peerMeta}>Tap to start chatting</Text>
+          ) : conversation ? (
+            <Text style={[styles.peerMeta, { color: '#999' }]}>Offline • Tap to view chat</Text>
           ) : (
             <Text style={styles.peerMeta}>Not online</Text>
           )}
@@ -403,6 +496,13 @@ const PeersListScreen = ({ navigation, route }) => {
             <Text style={styles.timestamp}>
               {formatTime(conversation.lastMessageTimestamp)}
             </Text>
+          )}
+          {conversation?.unreadCount > 0 && (
+            <View style={styles.unreadBadge}>
+              <Text style={styles.unreadText}>
+                {conversation.unreadCount > 99 ? '99+' : conversation.unreadCount}
+              </Text>
+            </View>
           )}
           <Text style={styles.chevron}>›</Text>
         </View>
@@ -538,6 +638,9 @@ const styles = StyleSheet.create({
     color: COLORS.text,
     marginRight: STYLES.spacing.sm,
   },
+  peerNameUnread: {
+    fontWeight: '700',
+  },
   peerPhone: {
     fontSize: 12,
     color: COLORS.textSecondary,
@@ -557,6 +660,10 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: COLORS.textSecondary,
   },
+  lastMessageUnread: {
+    fontWeight: '600',
+    color: COLORS.text,
+  },
   peerRight: {
     alignItems: 'flex-end',
     justifyContent: 'center',
@@ -569,6 +676,21 @@ const styles = StyleSheet.create({
   chevron: {
     fontSize: 24,
     color: COLORS.textSecondary,
+  },
+  unreadBadge: {
+    backgroundColor: COLORS.primary,
+    borderRadius: 12,
+    minWidth: 24,
+    height: 24,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 6,
+    marginVertical: 2,
+  },
+  unreadText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: 'bold',
   },
   emptyList: {
     flex: 1,
