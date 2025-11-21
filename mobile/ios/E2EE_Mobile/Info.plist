@@ -31,10 +31,14 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
+	<key>NSCameraUsageDescription</key>
+	<string>IMPLI needs access to your camera for video calls</string>
 	<key>NSContactsUsageDescription</key>
 	<string>IMPLI needs access to your contacts to display names instead of phone numbers</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string></string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>IMPLI needs access to your microphone for voice and video calls</string>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
 	<key>UIRequiredDeviceCapabilities</key>

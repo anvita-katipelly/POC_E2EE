@@ -10,11 +10,13 @@ import {
   Platform,
   Alert,
   ActivityIndicator,
+  PermissionsAndroid,
 } from 'react-native';
 import socketService from '../services/socketService';
 import messageStorage from '../services/messageStorage';
 import contactsService from '../services/contactsService';
 import encryptionService from '../services/encryptionService';
+import webrtcService from '../services/webrtcService';
 import { COLORS, STYLES } from '../config/config';
 
 // Helper to generate unique IDs
@@ -64,11 +66,27 @@ const ChatScreen = ({ navigation, route }) => {
   }, [conversationId]);
 
   useEffect(() => {
-    // Set navigation header with contact name if available
+    // Set navigation header with contact name and call buttons
     const displayName = contactsService.getDisplayName(peerPhone);
     navigation.setOptions({
       title: displayName || 'Chat',
       headerBackTitle: 'Back',
+      headerRight: () => (
+        <View style={{ flexDirection: 'row', marginRight: 10 }}>
+          <TouchableOpacity
+            style={{ padding: 10 }}
+            onPress={handleVoiceCall}
+          >
+            <Text style={{ fontSize: 20 }}>📞</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={{ padding: 10, marginLeft: 10 }}
+            onPress={handleVideoCall}
+          >
+            <Text style={{ fontSize: 20 }}>📹</Text>
+          </TouchableOpacity>
+        </View>
+      ),
     });
 
     // Listen for incoming messages (just to update UI, global handler saves to storage)
@@ -248,6 +266,103 @@ const ChatScreen = ({ navigation, route }) => {
       setMessages((prevMessages) =>
         prevMessages.filter((msg) => msg.id !== tempMessage.id)
       );
+    }
+  };
+
+  // Handle voice call
+  const handleVoiceCall = async () => {
+    try {
+      console.log('[ChatScreen] Initiating voice call to', normalizedPeerPhone);
+      
+      // Check if camera/mic permissions are granted
+      if (Platform.OS === 'android') {
+        const hasMicPermission = await PermissionsAndroid.check(
+          PermissionsAndroid.PERMISSIONS.RECORD_AUDIO
+        );
+        
+        if (!hasMicPermission) {
+          const granted = await PermissionsAndroid.request(
+            PermissionsAndroid.PERMISSIONS.RECORD_AUDIO
+          );
+          
+          if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
+            Alert.alert('Permission Denied', 'Microphone permission is required for voice calls');
+            return;
+          }
+        }
+      }
+      
+      // Initiate call through WebRTC service
+      const offer = await webrtcService.initiateCall(normalizedPeerPhone, false);
+      
+      // Set up ICE candidate callback
+      webrtcService.onIceCandidate = (candidate) => {
+        socketService.sendIceCandidate(normalizedPeerPhone, candidate);
+      };
+      
+      // Send call offer through signaling server
+      socketService.sendCallOffer(normalizedPeerPhone, offer, false);
+      
+      // Navigate to call screen
+      navigation.navigate('Call', {
+        peerPhone: normalizedPeerPhone,
+        isVideo: false,
+        isOutgoing: true,
+      });
+    } catch (error) {
+      console.error('[ChatScreen] Error initiating voice call:', error);
+      Alert.alert('Call Failed', error.message || 'Failed to start voice call');
+    }
+  };
+
+  // Handle video call
+  const handleVideoCall = async () => {
+    try {
+      console.log('[ChatScreen] Initiating video call to', normalizedPeerPhone);
+      
+      // Check if camera/mic permissions are granted
+      if (Platform.OS === 'android') {
+        const hasCameraPermission = await PermissionsAndroid.check(
+          PermissionsAndroid.PERMISSIONS.CAMERA
+        );
+        const hasMicPermission = await PermissionsAndroid.check(
+          PermissionsAndroid.PERMISSIONS.RECORD_AUDIO
+        );
+        
+        if (!hasCameraPermission || !hasMicPermission) {
+          const granted = await PermissionsAndroid.requestMultiple([
+            PermissionsAndroid.PERMISSIONS.CAMERA,
+            PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
+          ]);
+          
+          if (granted['android.permission.CAMERA'] !== PermissionsAndroid.RESULTS.GRANTED ||
+              granted['android.permission.RECORD_AUDIO'] !== PermissionsAndroid.RESULTS.GRANTED) {
+            Alert.alert('Permission Denied', 'Camera and microphone permissions are required for video calls');
+            return;
+          }
+        }
+      }
+      
+      // Initiate call through WebRTC service
+      const offer = await webrtcService.initiateCall(normalizedPeerPhone, true);
+      
+      // Set up ICE candidate callback
+      webrtcService.onIceCandidate = (candidate) => {
+        socketService.sendIceCandidate(normalizedPeerPhone, candidate);
+      };
+      
+      // Send call offer through signaling server
+      socketService.sendCallOffer(normalizedPeerPhone, offer, true);
+      
+      // Navigate to call screen
+      navigation.navigate('Call', {
+        peerPhone: normalizedPeerPhone,
+        isVideo: true,
+        isOutgoing: true,
+      });
+    } catch (error) {
+      console.error('[ChatScreen] Error initiating video call:', error);
+      Alert.alert('Call Failed', error.message || 'Failed to start video call');
     }
   };
 

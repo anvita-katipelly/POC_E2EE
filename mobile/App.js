@@ -24,6 +24,8 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import RegisterScreen from './src/screens/RegisterScreen';
 import PeersListScreen from './src/screens/PeersListScreen';
 import ChatScreen from './src/screens/ChatScreen';
+import CallScreen from './src/screens/CallScreen';
+import IncomingCallScreen from './src/screens/IncomingCallScreen';
 import { COLORS } from './src/config/config';
 
 const Stack = createNativeStackNavigator();
@@ -63,6 +65,19 @@ const App = () => {
             options={({ route }) => ({
               title: route.params?.peerPhone || 'Chat',
             })}
+          />
+          <Stack.Screen
+            name="Call"
+            component={CallScreen}
+            options={{ headerShown: false }}
+          />
+          <Stack.Screen
+            name="IncomingCall"
+            component={IncomingCallScreen}
+            options={{ 
+              headerShown: false,
+              presentation: 'fullScreenModal'
+            }}
           />
         </Stack.Navigator>
       </NavigationContainer>

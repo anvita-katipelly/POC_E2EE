@@ -95,6 +95,32 @@ class SocketService {
     this.socket.on('peer-offline', (data) => {
       this.emit('peer-offline', data);
     });
+
+    // Call signaling events
+    this.socket.on('call-offer', (data) => {
+      console.log('[SocketService] Received call-offer from:', data.from);
+      this.emit('call-offer', data);
+    });
+
+    this.socket.on('call-answer', (data) => {
+      console.log('[SocketService] Received call-answer from:', data.from);
+      this.emit('call-answer', data);
+    });
+
+    this.socket.on('ice-candidate', (data) => {
+      console.log('[SocketService] Received ice-candidate from:', data.from);
+      this.emit('ice-candidate', data);
+    });
+
+    this.socket.on('call-rejected', (data) => {
+      console.log('[SocketService] Call rejected by:', data.from);
+      this.emit('call-rejected', data);
+    });
+
+    this.socket.on('call-ended', (data) => {
+      console.log('[SocketService] Call ended by:', data.from);
+      this.emit('call-ended', data);
+    });
   }
 
   /**
@@ -142,6 +168,80 @@ class SocketService {
     }
 
     this.socket.emit('get-online-peers');
+  }
+
+  /**
+   * Send call offer to a peer
+   * @param {string} to - Recipient phone number
+   * @param {Object} offer - WebRTC offer (SDP)
+   * @param {boolean} isVideo - Is this a video call?
+   */
+  sendCallOffer(to, offer, isVideo) {
+    console.log('[SocketService] Sending call offer to:', to);
+    
+    if (!this.socket || !this.isConnected) {
+      throw new Error('Socket not connected');
+    }
+
+    this.socket.emit('call-offer', { to, offer, isVideo });
+  }
+
+  /**
+   * Send call answer to a peer
+   * @param {string} to - Recipient phone number
+   * @param {Object} answer - WebRTC answer (SDP)
+   */
+  sendCallAnswer(to, answer) {
+    console.log('[SocketService] Sending call answer to:', to);
+    
+    if (!this.socket || !this.isConnected) {
+      throw new Error('Socket not connected');
+    }
+
+    this.socket.emit('call-answer', { to, answer });
+  }
+
+  /**
+   * Send ICE candidate to a peer
+   * @param {string} to - Recipient phone number
+   * @param {Object} candidate - ICE candidate
+   */
+  sendIceCandidate(to, candidate) {
+    if (!this.socket || !this.isConnected) {
+      console.warn('[SocketService] Cannot send ICE candidate - not connected');
+      return;
+    }
+
+    this.socket.emit('ice-candidate', { to, candidate });
+  }
+
+  /**
+   * Reject an incoming call
+   * @param {string} to - Caller's phone number
+   */
+  rejectCall(to) {
+    console.log('[SocketService] Rejecting call from:', to);
+    
+    if (!this.socket || !this.isConnected) {
+      throw new Error('Socket not connected');
+    }
+
+    this.socket.emit('call-reject', { to });
+  }
+
+  /**
+   * End an active call
+   * @param {string} to - Other peer's phone number
+   */
+  endCall(to) {
+    console.log('[SocketService] Ending call with:', to);
+    
+    if (!this.socket || !this.isConnected) {
+      console.warn('[SocketService] Cannot end call - not connected');
+      return;
+    }
+
+    this.socket.emit('call-end', { to });
   }
 
   /**

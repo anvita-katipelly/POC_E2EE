@@ -13,6 +13,7 @@ import socketService from '../services/socketService';
 import messageStorage from '../services/messageStorage';
 import messageHandler from '../services/messageHandler';
 import contactsService from '../services/contactsService';
+import webrtcService from '../services/webrtcService';
 import { COLORS, STYLES } from '../config/config';
 
 const PeersListScreen = ({ navigation, route }) => {
@@ -35,6 +36,45 @@ const PeersListScreen = ({ navigation, route }) => {
       // because we want the handler to persist across screen changes
     };
   }, [phoneNumber]);
+
+  // Listen for incoming calls
+  useEffect(() => {
+    console.log('[PeersListScreen] Setting up incoming call listener');
+
+    const handleIncomingCall = (data) => {
+      console.log('[PeersListScreen] Incoming call from:', data.from);
+      
+      // Check if we're already in a call
+      const currentState = webrtcService.getState();
+      if (currentState.callState !== 'idle') {
+        console.log('[PeersListScreen] Already in a call, rejecting');
+        socketService.rejectCall(data.from);
+        return;
+      }
+
+      // Navigate to incoming call screen
+      navigation.navigate('IncomingCall', {
+        from: data.from,
+        offer: data.offer,
+        isVideo: data.isVideo,
+      });
+    };
+
+    const handleCallRejected = (data) => {
+      console.log('[PeersListScreen] Call rejected by:', data.from);
+      Alert.alert('Call Rejected', `${data.from} declined your call`);
+      webrtcService.endCall();
+    };
+
+    socketService.on('call-offer', handleIncomingCall);
+    socketService.on('call-rejected', handleCallRejected);
+
+    return () => {
+      console.log('[PeersListScreen] Cleaning up call listeners');
+      socketService.off('call-offer', handleIncomingCall);
+      socketService.off('call-rejected', handleCallRejected);
+    };
+  }, [navigation]);
 
   // Load contacts from device
   useEffect(() => {

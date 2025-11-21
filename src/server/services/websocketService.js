@@ -251,6 +251,143 @@ function initializeWebSocket(httpServer) {
       }
     });
 
+    // Call signaling - offer
+    socket.on('call-offer', (data) => {
+      try {
+        const { to, offer, isVideo } = data;
+        const from = peerStore.getPhoneNumber(socket.id);
+
+        if (!from) {
+          socket.emit('error', { message: 'Not registered. Please register first.' });
+          return;
+        }
+
+        if (!to || !offer) {
+          socket.emit('error', { message: 'to and offer are required' });
+          return;
+        }
+
+        logEvent('Call offer', { from, to, isVideo });
+
+        const recipientSocketId = peerStore.getSocketId(to);
+        if (recipientSocketId) {
+          io.to(recipientSocketId).emit('call-offer', {
+            from,
+            offer,
+            isVideo,
+            timestamp: new Date().toISOString(),
+          });
+        } else {
+          socket.emit('error', { message: 'Recipient is offline' });
+        }
+      } catch (err) {
+        logEvent('Call offer error', { error: err.message, socketId: socket.id });
+        socket.emit('error', { message: 'Failed to send call offer', error: err.message });
+      }
+    });
+
+    // Call signaling - answer
+    socket.on('call-answer', (data) => {
+      try {
+        const { to, answer } = data;
+        const from = peerStore.getPhoneNumber(socket.id);
+
+        if (!from) {
+          socket.emit('error', { message: 'Not registered. Please register first.' });
+          return;
+        }
+
+        if (!to || !answer) {
+          socket.emit('error', { message: 'to and answer are required' });
+          return;
+        }
+
+        logEvent('Call answer', { from, to });
+
+        const recipientSocketId = peerStore.getSocketId(to);
+        if (recipientSocketId) {
+          io.to(recipientSocketId).emit('call-answer', {
+            from,
+            answer,
+            timestamp: new Date().toISOString(),
+          });
+        }
+      } catch (err) {
+        logEvent('Call answer error', { error: err.message, socketId: socket.id });
+        socket.emit('error', { message: 'Failed to send call answer', error: err.message });
+      }
+    });
+
+    // ICE candidate exchange
+    socket.on('ice-candidate', (data) => {
+      try {
+        const { to, candidate } = data;
+        const from = peerStore.getPhoneNumber(socket.id);
+
+        if (!from || !to || !candidate) {
+          return; // Silently ignore invalid ICE candidates
+        }
+
+        const recipientSocketId = peerStore.getSocketId(to);
+        if (recipientSocketId) {
+          io.to(recipientSocketId).emit('ice-candidate', {
+            from,
+            candidate,
+          });
+        }
+      } catch (err) {
+        logEvent('ICE candidate error', { error: err.message, socketId: socket.id });
+      }
+    });
+
+    // Call rejection
+    socket.on('call-reject', (data) => {
+      try {
+        const { to } = data;
+        const from = peerStore.getPhoneNumber(socket.id);
+
+        if (!from || !to) {
+          return;
+        }
+
+        logEvent('Call rejected', { from, to });
+
+        const recipientSocketId = peerStore.getSocketId(to);
+        if (recipientSocketId) {
+          io.to(recipientSocketId).emit('call-rejected', {
+            from,
+            timestamp: new Date().toISOString(),
+          });
+        }
+      } catch (err) {
+        logEvent('Call reject error', { error: err.message, socketId: socket.id });
+      }
+    });
+
+    // Call end
+    socket.on('call-end', (data) => {
+      try {
+        const { to } = data;
+        const from = peerStore.getPhoneNumber(socket.id);
+
+        if (!from || !to) {
+          return;
+        }
+
+        logEvent('Call ended', { from, to });
+
+        const recipientSocketId = peerStore.getSocketId(to);
+        if (recipientSocketId) {
+          io.to(recipientSocketId).emit('call-ended', {
+            from,
+            timestamp: new Date().toISOString(),
+          });
+        }
+      } catch (err) {
+        logEvent('Call end error', { error: err.message, socketId: socket.id });
+      }
+    });
+
     // Get online peers
     socket.on('get-online-peers', () => {
       const peers = peerStore.getAllPeers();
