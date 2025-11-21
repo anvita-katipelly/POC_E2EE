@@ -203,26 +203,28 @@ class WebRTCService {
       console.log('[WebRTC] Set remote description (answer), new state:', this.peerConnection.signalingState);
     } catch (error) {
       const state = this.peerConnection?.signalingState;
-      console.error('[WebRTC] setRemoteDescription failed:', error.message, 'state:', state);
+      const isStableError =
+        state === 'stable' || /wrong state: stable/i.test(error.message || '');
 
       // If the current remoteDescription SDP matches the incoming answer, it's a duplicate/late answer — ignore
       try {
         const existingRemote = this.peerConnection?.remoteDescription?.sdp;
         if (existingRemote && existingRemote === answer.sdp) {
-          console.log('[WebRTC] Remote description already matches incoming answer - ignoring');
+          console.log('[WebRTC] Remote description already matches incoming answer - ignoring duplicate answer');
           return;
         }
       } catch (e) {
         // ignore any error in checking
       }
 
-      // Ignore if connection already transitioned to stable (duplicate answer)
-      if (state === 'stable' || /wrong state: stable/i.test(error.message)) {
-        console.log('[WebRTC] Ignoring duplicate/late answer (already stable)');
+      // Ignore duplicate/late answers once we're already stable, but don't log as an error
+      if (isStableError) {
+        console.log('[WebRTC] Ignoring duplicate/late answer (already in stable state)');
         return;
       }
 
-      // unexpected error, rethrow
+      // For unexpected errors, log as real error and rethrow
+      console.error('[WebRTC] setRemoteDescription failed:', error.message, 'state:', state);
       throw error;
     }
 
