@@ -890,7 +890,15 @@ PODS:
     - React-debug
   - react-native-contacts (7.0.8):
     - React-Core
+  - react-native-document-picker (9.3.1):
+    - glog
+    - RCT-Folly (= 2022.05.16.00)
+    - React-Core
   - react-native-get-random-values (1.11.0):
+    - React-Core
+  - react-native-image-picker (7.2.3):
+    - glog
+    - RCT-Folly (= 2022.05.16.00)
     - React-Core
   - react-native-quick-crypto (0.7.17):
     - glog
@@ -1074,6 +1082,8 @@ PODS:
     - React-Core
   - RNCAsyncStorage (2.2.0):
     - React-Core
+  - RNFS (2.20.0):
+    - React-Core
   - RNGestureHandler (2.14.1):
     - glog
     - RCT-Folly (= 2022.05.16.00)
@@ -1117,7 +1127,9 @@ DEPENDENCIES:
   - React-logger (from `../node_modules/react-native/ReactCommon/logger`)
   - React-Mapbuffer (from `../node_modules/react-native/ReactCommon`)
   - react-native-contacts (from `../node_modules/react-native-contacts`)
+  - react-native-document-picker (from `../node_modules/react-native-document-picker`)
   - react-native-get-random-values (from `../node_modules/react-native-get-random-values`)
+  - react-native-image-picker (from `../node_modules/react-native-image-picker`)
   - react-native-quick-crypto (from `../node_modules/react-native-quick-crypto`)
   - react-native-safe-area-context (from `../node_modules/react-native-safe-area-context`)
   - react-native-webrtc (from `../node_modules/react-native-webrtc`)
@@ -1143,6 +1155,7 @@ DEPENDENCIES:
   - ReactCommon/turbomodule/core (from `../node_modules/react-native/ReactCommon`)
   - ReactNativeIncallManager (from `../node_modules/react-native-incall-manager`)
   - "RNCAsyncStorage (from `../node_modules/@react-native-async-storage/async-storage`)"
+  - RNFS (from `../node_modules/react-native-fs`)
   - RNGestureHandler (from `../node_modules/react-native-gesture-handler`)
   - RNScreens (from `../node_modules/react-native-screens`)
   - Yoga (from `../node_modules/react-native/ReactCommon/yoga`)
@@ -1213,8 +1226,12 @@ EXTERNAL SOURCES:
     :path: "../node_modules/react-native/ReactCommon"
   react-native-contacts:
     :path: "../node_modules/react-native-contacts"
+  react-native-document-picker:
+    :path: "../node_modules/react-native-document-picker"
   react-native-get-random-values:
     :path: "../node_modules/react-native-get-random-values"
+  react-native-image-picker:
+    :path: "../node_modules/react-native-image-picker"
   react-native-quick-crypto:
     :path: "../node_modules/react-native-quick-crypto"
   react-native-safe-area-context:
@@ -1265,6 +1282,8 @@ EXTERNAL SOURCES:
     :path: "../node_modules/react-native-incall-manager"
   RNCAsyncStorage:
     :path: "../node_modules/@react-native-async-storage/async-storage"
+  RNFS:
+    :path: "../node_modules/react-native-fs"
   RNGestureHandler:
     :path: "../node_modules/react-native-gesture-handler"
   RNScreens:
@@ -1305,7 +1324,9 @@ SPEC CHECKSUMS:
   React-logger: b42a493ae72922d8d6a497038359240ffd457119
   React-Mapbuffer: 2cd1af67c3754dfb934948448125f0e051586db7
   react-native-contacts: f551920b74ebfc5f7f6df307495f085e504a4369
+  react-native-document-picker: c17d9883ce3220bdc4812e802184328dd964a333
   react-native-get-random-values: d16467cf726c618e9c7a8c3c39c31faa2244bbba
+  react-native-image-picker: ac0932bbd899355e2a844b7997abb424a4113f37
   react-native-quick-crypto: ac626174e0769cd4e76aca79124ba41a90fb401e
   react-native-safe-area-context: bf9d9d58f0f6726d4a6257088044c2595017579d
   react-native-webrtc: eb8582f60b91e8883c290425bf1676c4bcedd63d
@@ -1331,11 +1352,12 @@ SPEC CHECKSUMS:
   ReactCommon: 35e3b6a1c75d462acb0155e38e627b98d5bf586b
   ReactNativeIncallManager: dccd3e7499caa3bb73d3acfedf4fb0360f1a87d5
   RNCAsyncStorage: b44e8a4e798c3e1f56bffccd0f591f674fb9198f
+  RNFS: 89de7d7f4c0f6bafa05343c578f61118c8282ed8
   RNGestureHandler: 55447e4051459b0b7f5f5173567f92286d01cf88
   RNScreens: 8d1521c6e375a79dbd4525efaf21704cc64ac0cf
   SocketRocket: f32cd54efbe0f095c4d7594881e52619cfe80b17
   Yoga: 13c8ef87792450193e117976337b8527b49e8c03
 
-PODFILE CHECKSUM: f4a85510aa838a17cf94853f98f26e843bddd3a9
+PODFILE CHECKSUM: 2ee2f6698ee9d7741739011d767f7410518d3a88
 
 COCOAPODS: 1.16.2

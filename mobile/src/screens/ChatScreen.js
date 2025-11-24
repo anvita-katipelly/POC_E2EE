@@ -19,7 +19,8 @@ import contactsService from '../services/contactsService';
 import encryptionService from '../services/encryptionService';
 import webrtcService from '../services/webrtcService';
 import mediaUploadService from '../services/mediaUploadService';
-import { launchImageLibrary } from 'react-native-image-picker';
+import { launchImageLibrary, launchCamera } from 'react-native-image-picker';
+import DocumentPicker from 'react-native-document-picker';
 import { COLORS, STYLES, SERVER_URL } from '../config/config';
 import RNFS from 'react-native-fs';
 
@@ -39,6 +40,26 @@ const sanitizeFileName = (name) => {
     return `media_${Date.now()}.bin`;
   }
   return name.replace(/[^\w\-.]/g, '_');
+};
+
+const getDownloadDirectory = () => {
+  if (Platform.OS === 'android' && RNFS.DownloadDirectoryPath) {
+    return `${RNFS.DownloadDirectoryPath}/E2EE`;
+  }
+  return `${RNFS.DocumentDirectoryPath}/E2EE`;
+};
+
+const stripFileScheme = (uri = '') => uri.replace(/^file:\/\//, '');
+const ensureDirectoryExists = async (dirPath) => {
+  try {
+    const exists = await RNFS.exists(dirPath);
+    if (!exists) {
+      await RNFS.mkdir(dirPath);
+    }
+  } catch (error) {
+    console.error('[ChatScreen] Failed to create directory:', dirPath, error);
+    throw error;
+  }
 };
 
 // Helper to generate unique IDs
@@ -247,10 +268,84 @@ const ChatScreen = ({ navigation, route }) => {
       return;
     }
 
+    Alert.alert(
+      'Select Media',
+      'Choose an option',
+      [
+        {
+          text: 'Camera',
+          onPress: () => handleOpenCamera(),
+        },
+        {
+          text: 'Media Library',
+          onPress: () => handleOpenMediaLibrary(),
+        },
+        {
+          text: 'Files',
+          onPress: () => handleOpenDocumentPicker(),
+        },
+        {
+          text: 'Cancel',
+          style: 'cancel',
+        },
+      ],
+      { cancelable: true }
+    );
+  };
+
+  const handleOpenCamera = async () => {
+    // Check camera permissions on Android
+    if (Platform.OS === 'android') {
+      const hasCameraPermission = await PermissionsAndroid.check(
+        PermissionsAndroid.PERMISSIONS.CAMERA
+      );
+      
+      if (!hasCameraPermission) {
+        const granted = await PermissionsAndroid.request(
+          PermissionsAndroid.PERMISSIONS.CAMERA
+        );
+        
+        if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
+          Alert.alert('Permission Denied', 'Camera permission is required to take photos/videos');
+          return;
+        }
+      }
+    }
+
+    launchCamera(
+      {
+        mediaType: 'mixed',
+        quality: 0.8,
+        videoQuality: 'high',
+        saveToPhotos: false,
+      },
+      async (response) => {
+        if (response.didCancel) {
+          return;
+        }
+
+        if (response.errorCode) {
+          Alert.alert('Camera Error', response.errorMessage || 'Failed to open camera');
+          return;
+        }
+
+        const asset = response.assets?.[0];
+        if (asset?.uri) {
+          await handleSendMedia(asset);
+        } else {
+          Alert.alert('Media Error', 'No media captured');
+        }
+      }
+    );
+  };
+
+  const handleOpenMediaLibrary = () => {
     launchImageLibrary(
       {
         mediaType: 'mixed',
         selectionLimit: 1,
+        quality: 0.8,
+        videoQuality: 'high',
       },
       async (response) => {
         if (response.didCancel) {
@@ -270,6 +365,60 @@ const ChatScreen = ({ navigation, route }) => {
         }
       }
     );
+  };
+
+  const handleOpenDocumentPicker = async () => {
+    try {
+      const document = await DocumentPicker.pickSingle({
+        type: [DocumentPicker.types.allFiles],
+        copyTo: 'cachesDirectory',
+        presentationStyle: 'fullScreen',
+      });
+
+      const resolvedUri = document.fileCopyUri || document.uri;
+      if (!resolvedUri) {
+        Alert.alert('File Error', 'Unable to access the selected file.');
+        return;
+      }
+
+      const asset = {
+        uri: resolvedUri,
+        fileName: document.name || sanitizeFileName(document.uri?.split('/').pop()),
+        type: document.type || 'application/octet-stream',
+        fileSize: document.size || 0,
+      };
+
+      await handleSendMedia(asset);
+    } catch (err) {
+      if (DocumentPicker.isCancel(err)) {
+        return;
+      }
+      console.error('[ChatScreen] Document picker error:', err);
+      Alert.alert('File Error', err.message || 'Failed to select file');
+    }
+  };
+
+  const handleSaveMediaToDevice = async (message) => {
+    if (!message?.localUri) {
+      Alert.alert('Save failed', 'Download the file before saving to your device.');
+      return;
+    }
+
+    try {
+      const destinationDir = getDownloadDirectory();
+      await ensureDirectoryExists(destinationDir);
+
+      const safeName = sanitizeFileName(message.fileName || `${message.id}.bin`);
+      const destinationPath = `${destinationDir}/${safeName}`;
+      const sourcePath = stripFileScheme(message.localUri);
+
+      await RNFS.copyFile(sourcePath, destinationPath);
+
+      Alert.alert('Saved', `File stored at:\n${destinationPath}`);
+    } catch (error) {
+      console.error('[ChatScreen] Failed to save media:', error);
+      Alert.alert('Save failed', error.message || 'Unable to save file to device.');
+    }
   };
 
   const handleSendMedia = async (asset) => {
@@ -723,7 +872,15 @@ const ChatScreen = ({ navigation, route }) => {
                 </TouchableOpacity>
               )}
               {item.localUri && (
-                <Text style={styles.downloadedTag}>Saved for quick preview</Text>
+                <View style={styles.localFileActions}>
+                  <Text style={styles.downloadedTag}>Cached for quick preview</Text>
+                  <TouchableOpacity
+                    style={styles.saveButton}
+                    onPress={() => handleSaveMediaToDevice(item)}
+                  >
+                    <Text style={styles.saveButtonText}>Save to device</Text>
+                  </TouchableOpacity>
+                </View>
               )}
             </View>
           ) : (
@@ -953,6 +1110,21 @@ const styles = StyleSheet.create({
     marginTop: STYLES.spacing.xs,
     fontSize: 12,
     color: COLORS.textSecondary,
+  },
+  localFileActions: {
+    marginTop: STYLES.spacing.xs,
+  },
+  saveButton: {
+    marginTop: STYLES.spacing.xs,
+    alignSelf: 'flex-start',
+    paddingHorizontal: STYLES.spacing.md,
+    paddingVertical: 6,
+    borderRadius: STYLES.borderRadius.sm,
+    backgroundColor: COLORS.secondary,
+  },
+  saveButtonText: {
+    color: COLORS.surface,
+    fontWeight: '600',
   },
   attachmentPreview: {
     width: 180,
