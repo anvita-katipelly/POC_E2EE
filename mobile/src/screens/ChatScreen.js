@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View,
   Text,
@@ -11,7 +11,7 @@ import {
   Alert,
   ActivityIndicator,
   PermissionsAndroid,
-  Linking,
+  Image,
 } from 'react-native';
 import socketService from '../services/socketService';
 import messageStorage from '../services/messageStorage';
@@ -21,6 +21,25 @@ import webrtcService from '../services/webrtcService';
 import mediaUploadService from '../services/mediaUploadService';
 import { launchImageLibrary } from 'react-native-image-picker';
 import { COLORS, STYLES, SERVER_URL } from '../config/config';
+import RNFS from 'react-native-fs';
+
+const isImageAttachment = (message) => {
+  if (!message) {
+    return false;
+  }
+  if (message.mimeType && message.mimeType.startsWith('image/')) {
+    return true;
+  }
+  const name = message.fileName || '';
+  return /\.(png|jpe?g|gif|webp|heic|heif)$/i.test(name);
+};
+
+const sanitizeFileName = (name) => {
+  if (!name) {
+    return `media_${Date.now()}.bin`;
+  }
+  return name.replace(/[^\w\-.]/g, '_');
+};
 
 // Helper to generate unique IDs
 const generateUniqueId = () => {
@@ -42,6 +61,7 @@ const ChatScreen = ({ navigation, route }) => {
   const [uploadProgress, setUploadProgress] = useState(0);
   const [pendingMediaMessageId, setPendingMediaMessageId] = useState(null);
   const flatListRef = useRef(null);
+  const autoDownloadQueue = useRef(new Set());
   const conversationId = messageStorage.getConversationId(normalizedMyPhone, normalizedPeerPhone);
 
   console.log('[ChatScreen] Initialized with:', { 
@@ -205,18 +225,21 @@ const ChatScreen = ({ navigation, route }) => {
     };
   }, [peerPhone, navigation, conversationId]);
 
-  const updateStoredMessage = async (messageId, updates) => {
-    try {
-      const stored = await messageStorage.getMessages(conversationId);
-      const index = stored.findIndex((msg) => msg.id === messageId);
-      if (index >= 0) {
-        stored[index] = { ...stored[index], ...updates };
-        await messageStorage.saveMessages(conversationId, stored);
+  const updateStoredMessage = useCallback(
+    async (messageId, updates) => {
+      try {
+        const stored = await messageStorage.getMessages(conversationId);
+        const index = stored.findIndex((msg) => msg.id === messageId);
+        if (index >= 0) {
+          stored[index] = { ...stored[index], ...updates };
+          await messageStorage.saveMessages(conversationId, stored);
+        }
+      } catch (err) {
+        console.error('[ChatScreen] Failed to persist message update:', err);
       }
-    } catch (err) {
-      console.error('[ChatScreen] Failed to persist message update:', err);
-    }
-  };
+    },
+    [conversationId]
+  );
 
   const handleAttachPress = () => {
     if (isUploading) {
@@ -268,6 +291,7 @@ const ChatScreen = ({ navigation, route }) => {
       status: 'uploading',
       uploadProgress: 0,
       fileId: null,
+      localUri: asset.uri,
     };
 
     setMessages((prev) => [...prev, tempMessage]);
@@ -334,25 +358,84 @@ const ChatScreen = ({ navigation, route }) => {
     }
   };
 
-  const handleDownloadMedia = async (message) => {
-    if (!message?.fileId) {
-      Alert.alert('Download unavailable', 'Missing file reference for this attachment.');
-      return;
-    }
-
-    const downloadUrl = `${SERVER_URL}/receive/${message.fileId}`;
-    try {
-      const supported = await Linking.canOpenURL(downloadUrl);
-      if (supported) {
-        Linking.openURL(downloadUrl);
-      } else {
-        Alert.alert('Unsupported', 'Cannot open download link on this device.');
+  const handleDownloadMedia = useCallback(
+    async (message, options = {}) => {
+      if (!message?.fileId) {
+        if (!options.silent) {
+          Alert.alert('Download unavailable', 'Missing file reference for this attachment.');
+        }
+        return;
       }
-    } catch (error) {
-      console.error('[ChatScreen] Failed to open download link:', error);
-      Alert.alert('Download failed', error.message || 'Unable to start download');
-    }
-  };
+
+      if (message.status === 'downloading') {
+        return;
+      }
+
+      const downloadUrl = `${SERVER_URL}/receive/${message.fileId}`;
+      const safeName = sanitizeFileName(message.fileName || message.fileId);
+      const localPath = `${RNFS.CachesDirectoryPath}/e2ee_${safeName}`;
+      const displayUri = `file://${localPath}`;
+
+      setMessages((prev) =>
+        prev.map((msg) =>
+          msg.id === message.id ? { ...msg, status: 'downloading' } : msg
+        )
+      );
+
+      try {
+        const { promise } = RNFS.downloadFile({
+          fromUrl: downloadUrl,
+          toFile: localPath,
+        });
+        await promise;
+
+        setMessages((prev) =>
+          prev.map((msg) =>
+            msg.id === message.id ? { ...msg, status: 'downloaded', localUri: displayUri } : msg
+          )
+        );
+        await updateStoredMessage(message.id, {
+          status: 'downloaded',
+          localUri: displayUri,
+        });
+
+        return displayUri;
+      } catch (error) {
+        console.error('[ChatScreen] Failed to download media:', error);
+        if (!options.silent) {
+          Alert.alert('Download failed', error.message || 'Unable to download media');
+        }
+        setMessages((prev) =>
+          prev.map((msg) =>
+            msg.id === message.id ? { ...msg, status: 'failed' } : msg
+          )
+        );
+        await updateStoredMessage(message.id, { status: 'failed' });
+        throw error;
+      }
+    },
+    [SERVER_URL, updateStoredMessage]
+  );
+
+  useEffect(() => {
+    messages.forEach((msg) => {
+      if (
+        msg.type === 'file' &&
+        isImageAttachment(msg) &&
+        !msg.localUri &&
+        msg.from !== normalizedMyPhone &&
+        msg.status !== 'downloading' &&
+        !autoDownloadQueue.current.has(msg.id)
+      ) {
+        autoDownloadQueue.current.add(msg.id);
+        handleDownloadMedia(msg, { silent: true })
+          .catch(() => null)
+          .finally(() => {
+            autoDownloadQueue.current.delete(msg.id);
+          });
+      }
+    });
+  }, [messages, normalizedMyPhone, handleDownloadMedia]);
 
   const handleSend = async () => {
     const trimmedText = inputText.trim();
@@ -569,6 +652,8 @@ const ChatScreen = ({ navigation, route }) => {
   const renderMessage = ({ item }) => {
     const isMyMessage = item.isSent;
     const isFileMessage = item.type === 'file';
+    const showImagePreview = isFileMessage && isImageAttachment(item);
+    const hasLocalPreview = showImagePreview && !!item.localUri;
     return (
       <View
         style={[
@@ -584,6 +669,23 @@ const ChatScreen = ({ navigation, route }) => {
         >
           {isFileMessage ? (
             <View style={styles.attachmentContainer}>
+              {showImagePreview && (
+                hasLocalPreview ? (
+                  <Image
+                    source={{ uri: item.localUri }}
+                    style={styles.attachmentPreview}
+                    resizeMode="cover"
+                  />
+                ) : (
+                  <View style={styles.attachmentPreviewPlaceholder}>
+                    {item.status === 'downloading' ? (
+                      <ActivityIndicator color={COLORS.primary} />
+                    ) : (
+                      <Text style={styles.previewPlaceholderText}>Preview available after download</Text>
+                    )}
+                  </View>
+                )
+              )}
               <Text
                 style={[
                   styles.attachmentName,
@@ -606,15 +708,22 @@ const ChatScreen = ({ navigation, route }) => {
                   />
                 </View>
               )}
-              {item.fileId && (
+              {!item.localUri && item.fileId && (
                 <TouchableOpacity
-                  style={styles.downloadButton}
+                  style={[
+                    styles.downloadButton,
+                    item.status === 'downloading' && styles.downloadButtonDisabled,
+                  ]}
                   onPress={() => handleDownloadMedia(item)}
+                  disabled={item.status === 'downloading'}
                 >
                   <Text style={styles.downloadButtonText}>
-                    {isMyMessage ? 'Open' : 'Download'}
+                    {item.status === 'downloading' ? 'Downloading…' : 'Download'}
                   </Text>
                 </TouchableOpacity>
+              )}
+              {item.localUri && (
+                <Text style={styles.downloadedTag}>Saved for quick preview</Text>
               )}
             </View>
           ) : (
@@ -836,6 +945,35 @@ const styles = StyleSheet.create({
   downloadButtonText: {
     color: COLORS.surface,
     fontWeight: '600',
+  },
+  downloadButtonDisabled: {
+    opacity: 0.6,
+  },
+  downloadedTag: {
+    marginTop: STYLES.spacing.xs,
+    fontSize: 12,
+    color: COLORS.textSecondary,
+  },
+  attachmentPreview: {
+    width: 180,
+    height: 180,
+    borderRadius: STYLES.borderRadius.md,
+    marginBottom: STYLES.spacing.sm,
+  },
+  attachmentPreviewPlaceholder: {
+    width: 180,
+    height: 180,
+    borderRadius: STYLES.borderRadius.md,
+    marginBottom: STYLES.spacing.sm,
+    backgroundColor: '#E5E5EA',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: STYLES.spacing.sm,
+  },
+  previewPlaceholderText: {
+    fontSize: 12,
+    color: COLORS.textSecondary,
+    textAlign: 'center',
   },
   attachButton: {
     width: 36,
