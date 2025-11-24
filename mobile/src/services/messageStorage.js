@@ -104,9 +104,10 @@ class MessageStorage {
       const isFromMe = lastMessage.from === myPhoneNumber;
       const newUnreadCount = isFromMe ? currentUnreadCount : currentUnreadCount + 1;
       
+      const previewText = lastMessage.text || (lastMessage.type === 'file' ? '[File]' : '');
       const metadata = {
         id: conversationId,
-        lastMessage: lastMessage.text,
+        lastMessage: previewText,
         lastMessageTimestamp: lastMessage.timestamp,
         lastMessageFrom: lastMessage.from,
         updatedAt: new Date().toISOString(),

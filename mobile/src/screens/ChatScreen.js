@@ -11,13 +11,16 @@ import {
   Alert,
   ActivityIndicator,
   PermissionsAndroid,
+  Linking,
 } from 'react-native';
 import socketService from '../services/socketService';
 import messageStorage from '../services/messageStorage';
 import contactsService from '../services/contactsService';
 import encryptionService from '../services/encryptionService';
 import webrtcService from '../services/webrtcService';
-import { COLORS, STYLES } from '../config/config';
+import mediaUploadService from '../services/mediaUploadService';
+import { launchImageLibrary } from 'react-native-image-picker';
+import { COLORS, STYLES, SERVER_URL } from '../config/config';
 
 // Helper to generate unique IDs
 const generateUniqueId = () => {
@@ -35,6 +38,9 @@ const ChatScreen = ({ navigation, route }) => {
   const [inputText, setInputText] = useState('');
   const [isSending, setIsSending] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const [isUploading, setIsUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [pendingMediaMessageId, setPendingMediaMessageId] = useState(null);
   const flatListRef = useRef(null);
   const conversationId = messageStorage.getConversationId(normalizedMyPhone, normalizedPeerPhone);
 
@@ -92,7 +98,7 @@ const ChatScreen = ({ navigation, route }) => {
     // Listen for incoming messages (just to update UI, global handler saves to storage)
     const handleMessage = async (data) => {
       const normalizedDataFrom = data.from?.replace(/[\s\-()]/g, '');
-      if (normalizedDataFrom === normalizedPeerPhone && data.type === 'text') {
+      if (normalizedDataFrom === normalizedPeerPhone && (data.type === 'text' || data.type === 'file')) {
         console.log('[ChatScreen] Incoming message from peer, reloading from storage');
         
         // Wait a bit for global handler to save the message
@@ -116,25 +122,38 @@ const ChatScreen = ({ navigation, route }) => {
       console.log('[ChatScreen] Message sent confirmation received:', data);
       const normalizedDataTo = data.to?.replace(/[\s\-()]/g, '');
       if (normalizedDataTo === normalizedPeerPhone) {
-        setIsSending(false);
-        // Find the message and update its status
+        if (data.type !== 'file') {
+          setIsSending(false);
+        } else if (data.type === 'file' && pendingMediaMessageId) {
+          setIsUploading(false);
+          setPendingMediaMessageId(null);
+        }
+
         setMessages((prevMessages) => {
-          const lastMessage = prevMessages[prevMessages.length - 1];
-          console.log('[ChatScreen] Last message:', lastMessage);
-          if (lastMessage && lastMessage.isSent && !lastMessage.messageId) {
-            console.log('[ChatScreen] Updating message with server ID:', data.messageId);
-            const updatedMessages = prevMessages.map((msg, index) =>
-              index === prevMessages.length - 1
+          let updated = prevMessages;
+
+          if (data.type === 'file' && data.fileId) {
+            updated = prevMessages.map((msg) =>
+              msg.fileId === data.fileId
                 ? { ...msg, messageId: data.messageId, status: data.status || 'sent' }
                 : msg
             );
-            // Save updated messages to storage
-            messageStorage.saveMessages(conversationId, updatedMessages);
-            return updatedMessages;
           } else {
-            console.log('[ChatScreen] Not updating message - conditions not met');
+            const lastMessage = prevMessages[prevMessages.length - 1];
+            if (lastMessage && lastMessage.isSent && !lastMessage.messageId) {
+              updated = prevMessages.map((msg, index) =>
+                index === prevMessages.length - 1
+                  ? { ...msg, messageId: data.messageId, status: data.status || 'sent' }
+                  : msg
+              );
+            }
           }
-          return prevMessages;
+
+          if (updated !== prevMessages) {
+            messageStorage.saveMessages(conversationId, updated);
+          }
+
+          return updated;
         });
       }
     };
@@ -186,6 +205,155 @@ const ChatScreen = ({ navigation, route }) => {
     };
   }, [peerPhone, navigation, conversationId]);
 
+  const updateStoredMessage = async (messageId, updates) => {
+    try {
+      const stored = await messageStorage.getMessages(conversationId);
+      const index = stored.findIndex((msg) => msg.id === messageId);
+      if (index >= 0) {
+        stored[index] = { ...stored[index], ...updates };
+        await messageStorage.saveMessages(conversationId, stored);
+      }
+    } catch (err) {
+      console.error('[ChatScreen] Failed to persist message update:', err);
+    }
+  };
+
+  const handleAttachPress = () => {
+    if (isUploading) {
+      Alert.alert('Upload in progress', 'Please wait for the current upload to finish.');
+      return;
+    }
+
+    launchImageLibrary(
+      {
+        mediaType: 'mixed',
+        selectionLimit: 1,
+      },
+      async (response) => {
+        if (response.didCancel) {
+          return;
+        }
+
+        if (response.errorCode) {
+          Alert.alert('Media Error', response.errorMessage || 'Failed to open media library');
+          return;
+        }
+
+        const asset = response.assets?.[0];
+        if (asset?.uri) {
+          await handleSendMedia(asset);
+        } else {
+          Alert.alert('Media Error', 'No media asset selected');
+        }
+      }
+    );
+  };
+
+  const handleSendMedia = async (asset) => {
+    const mediaName = asset.fileName || 'Attachment';
+    const mimeType = asset.type || 'application/octet-stream';
+    const fileSize = asset.fileSize || 0;
+
+    const tempMessage = {
+      id: generateUniqueId(),
+      type: 'file',
+      text: `[File] ${mediaName}`,
+      fileName: mediaName,
+      mimeType,
+      fileSize,
+      from: normalizedMyPhone,
+      to: normalizedPeerPhone,
+      timestamp: new Date().toISOString(),
+      isSent: true,
+      status: 'uploading',
+      uploadProgress: 0,
+      fileId: null,
+    };
+
+    setMessages((prev) => [...prev, tempMessage]);
+    setTimeout(() => {
+      flatListRef.current?.scrollToEnd({ animated: true });
+    }, 100);
+    messageStorage
+      .addMessage(conversationId, tempMessage, normalizedMyPhone)
+      .catch((err) => console.error('[ChatScreen] Error storing temp media message:', err));
+
+    setIsUploading(true);
+    setUploadProgress(0);
+    setPendingMediaMessageId(tempMessage.id);
+
+    try {
+      const result = await mediaUploadService.uploadMedia({
+        fileUri: asset.uri,
+        fileName: mediaName,
+        mimeType,
+        recipientPhone: normalizedPeerPhone,
+        onProgress: (progress) => {
+          setUploadProgress(progress);
+          setMessages((prev) =>
+            prev.map((msg) =>
+              msg.id === tempMessage.id ? { ...msg, uploadProgress: progress } : msg
+            )
+          );
+        },
+      });
+
+      setMessages((prev) =>
+        prev.map((msg) =>
+          msg.id === tempMessage.id
+            ? {
+                ...msg,
+                fileId: result.fileId,
+                status: 'sent',
+                uploadProgress: 100,
+              }
+            : msg
+        )
+      );
+      await updateStoredMessage(tempMessage.id, {
+        fileId: result.fileId,
+        status: 'sent',
+        uploadProgress: 100,
+      });
+    } catch (error) {
+      console.error('[ChatScreen] Media upload failed:', error);
+      setMessages((prev) =>
+        prev.map((msg) =>
+          msg.id === tempMessage.id ? { ...msg, status: 'failed', error: error.message } : msg
+        )
+      );
+      Alert.alert('Upload failed', error.message || 'Unable to send media');
+      await updateStoredMessage(tempMessage.id, {
+        status: 'failed',
+        error: error.message,
+      });
+    } finally {
+      setIsUploading(false);
+      setPendingMediaMessageId(null);
+      setUploadProgress(0);
+    }
+  };
+
+  const handleDownloadMedia = async (message) => {
+    if (!message?.fileId) {
+      Alert.alert('Download unavailable', 'Missing file reference for this attachment.');
+      return;
+    }
+
+    const downloadUrl = `${SERVER_URL}/receive/${message.fileId}`;
+    try {
+      const supported = await Linking.canOpenURL(downloadUrl);
+      if (supported) {
+        Linking.openURL(downloadUrl);
+      } else {
+        Alert.alert('Unsupported', 'Cannot open download link on this device.');
+      }
+    } catch (error) {
+      console.error('[ChatScreen] Failed to open download link:', error);
+      Alert.alert('Download failed', error.message || 'Unable to start download');
+    }
+  };
+
   const handleSend = async () => {
     const trimmedText = inputText.trim();
     console.log('[ChatScreen] handleSend called, text:', trimmedText?.substring(0, 20));
@@ -197,6 +365,7 @@ const ChatScreen = ({ navigation, route }) => {
 
     const tempMessage = {
       id: generateUniqueId(),
+      type: 'text',
       text: trimmedText,
       from: normalizedMyPhone,
       to: normalizedPeerPhone,
@@ -399,6 +568,7 @@ const ChatScreen = ({ navigation, route }) => {
 
   const renderMessage = ({ item }) => {
     const isMyMessage = item.isSent;
+    const isFileMessage = item.type === 'file';
     return (
       <View
         style={[
@@ -412,14 +582,51 @@ const ChatScreen = ({ navigation, route }) => {
             isMyMessage ? styles.myMessageBubble : styles.peerMessageBubble,
           ]}
         >
-          <Text
-            style={[
-              styles.messageText,
-              isMyMessage ? styles.myMessageText : styles.peerMessageText,
-            ]}
-          >
-            {item.text}
-          </Text>
+          {isFileMessage ? (
+            <View style={styles.attachmentContainer}>
+              <Text
+                style={[
+                  styles.attachmentName,
+                  isMyMessage ? styles.myMessageText : styles.peerMessageText,
+                ]}
+                numberOfLines={2}
+              >
+                {item.fileName || 'Attachment'}
+              </Text>
+              <Text style={styles.attachmentMeta}>
+                {mediaUploadService.formatBytes(item.fileSize)} · {item.status || 'pending'}
+              </Text>
+              {item.status === 'uploading' && (
+                <View style={styles.progressBar}>
+                  <View
+                    style={[
+                      styles.progressFill,
+                      { width: `${item.uploadProgress || 0}%` },
+                    ]}
+                  />
+                </View>
+              )}
+              {item.fileId && (
+                <TouchableOpacity
+                  style={styles.downloadButton}
+                  onPress={() => handleDownloadMedia(item)}
+                >
+                  <Text style={styles.downloadButtonText}>
+                    {isMyMessage ? 'Open' : 'Download'}
+                  </Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          ) : (
+            <Text
+              style={[
+                styles.messageText,
+                isMyMessage ? styles.myMessageText : styles.peerMessageText,
+              ]}
+            >
+              {item.text}
+            </Text>
+          )}
           <Text
             style={[
               styles.messageTime,
@@ -458,6 +665,16 @@ const ChatScreen = ({ navigation, route }) => {
       />
 
       <View style={styles.inputContainer}>
+        <TouchableOpacity
+          style={[
+            styles.attachButton,
+            (isUploading || isSending) && styles.attachButtonDisabled,
+          ]}
+          onPress={handleAttachPress}
+          disabled={isUploading || isSending}
+        >
+          <Text style={styles.attachButtonText}>📎</Text>
+        </TouchableOpacity>
         <TextInput
           style={styles.input}
           placeholder="Type a message..."
@@ -479,6 +696,11 @@ const ChatScreen = ({ navigation, route }) => {
           <Text style={styles.sendButtonText}>Send</Text>
         </TouchableOpacity>
       </View>
+      {isUploading && (
+        <Text style={styles.uploadStatus}>
+          Uploading media... {uploadProgress}%
+        </Text>
+      )}
     </KeyboardAvoidingView>
   );
 };
@@ -579,6 +801,62 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
     textAlign: 'center',
+  },
+  attachmentContainer: {
+    width: '100%',
+  },
+  attachmentName: {
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  attachmentMeta: {
+    fontSize: 12,
+    color: COLORS.textSecondary,
+    marginTop: 4,
+  },
+  progressBar: {
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    marginTop: STYLES.spacing.xs,
+    overflow: 'hidden',
+  },
+  progressFill: {
+    height: 4,
+    backgroundColor: COLORS.secondary,
+  },
+  downloadButton: {
+    marginTop: STYLES.spacing.xs,
+    alignSelf: 'flex-start',
+    paddingHorizontal: STYLES.spacing.sm,
+    paddingVertical: 4,
+    borderRadius: STYLES.borderRadius.sm,
+    backgroundColor: COLORS.primary,
+  },
+  downloadButtonText: {
+    color: COLORS.surface,
+    fontWeight: '600',
+  },
+  attachButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: COLORS.background,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: STYLES.spacing.sm,
+  },
+  attachButtonText: {
+    fontSize: 20,
+  },
+  attachButtonDisabled: {
+    opacity: 0.4,
+  },
+  uploadStatus: {
+    color: COLORS.textSecondary,
+    fontSize: 12,
+    paddingHorizontal: STYLES.spacing.md,
+    paddingBottom: STYLES.spacing.sm,
   },
 });
 

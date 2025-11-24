@@ -160,6 +160,35 @@ class SocketService {
   }
 
   /**
+   * Send a file notification to a peer after upload completes
+   * @param {Object} payload
+   * @param {string} payload.to - Recipient phone number
+   * @param {string} payload.fileId - File identifier on the server
+   * @param {string} payload.originalName - Original filename
+   * @param {number} payload.totalChunks - Total chunk count
+   * @param {string} [payload.mimeType] - MIME type
+   * @param {number} [payload.size] - Original file size
+   */
+  async sendFile({ to, fileId, originalName, totalChunks, mimeType, size }) {
+    if (!this.socket || !this.isConnected) {
+      throw new Error('Socket not connected');
+    }
+
+    if (!to || !fileId || !originalName || !totalChunks) {
+      throw new Error('Missing file metadata for sendFile');
+    }
+
+    this.socket.emit('send-file', {
+      to,
+      fileId,
+      originalName,
+      totalChunks,
+      mimeType,
+      size,
+    });
+  }
+
+  /**
    * Request list of online peers
    */
   getOnlinePeers() {

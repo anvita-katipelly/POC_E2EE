@@ -9,6 +9,7 @@ const encryptionService = require('../services/encryptionService');
 const { getChunkIndices, ensureDirectory } = require('../../utils/fileUtils');
 const { UPLOADS_DIR, DECRYPTED_DIR } = require('../../config/paths');
 const { logEvent } = require('../../utils/logger');
+const mime = require('mime-types');
 
 /**
  * GET /meta/:fileId
@@ -77,7 +78,7 @@ router.get('/receive/:fileId', async (req, res) => {
       return res.status(404).json({ error: 'file not found' });
     }
 
-    const { originalName, totalChunks, mediaKeyHex, ivHex, hmacHex } = meta;
+    const { originalName, totalChunks, mediaKeyHex, ivHex, hmacHex, mimeType } = meta;
     logEvent('Receive requested', { fileId, originalName, totalChunks });
 
     const mediaKey = Buffer.from(mediaKeyHex, 'hex');
@@ -103,8 +104,9 @@ router.get('/receive/:fileId', async (req, res) => {
     logEvent('File saved locally', { fileId, path: outPath, size: original.length });
 
     // 5) Return the decrypted file as download
-    res.setHeader('Content-Type', 'application/octet-stream');
-    res.setHeader('Content-Disposition', `attachment; filename="${originalName}"`);
+    const contentType = mimeType || mime.lookup(originalName) || 'application/octet-stream';
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Content-Disposition', `inline; filename="${originalName}"`);
     res.setHeader('Content-Length', original.length);
     res.send(original);
 

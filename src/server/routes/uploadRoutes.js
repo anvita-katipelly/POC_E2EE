@@ -43,10 +43,10 @@ router.post('/upload-chunk', upload.single('chunk'), (req, res) => {
 /**
  * POST /complete
  * Store metadata after all chunks are uploaded and automatically decrypt/save the file
- * Body: { fileId, originalName, totalChunks, mediaKeyHex, ivHex, hmacHex }
+ * Body: { fileId, originalName, totalChunks, mediaKeyHex, ivHex, hmacHex, mimeType? }
  */
 router.post('/complete', async (req, res) => {
-  const { fileId, originalName, totalChunks, mediaKeyHex, ivHex, hmacHex } = req.body;
+  const { fileId, originalName, totalChunks, mediaKeyHex, ivHex, hmacHex, mimeType } = req.body;
   
   if (!fileId || !originalName || !totalChunks || !mediaKeyHex || !ivHex || !hmacHex) {
     logEvent('Bad /complete request', { body: req.body });
@@ -60,6 +60,7 @@ router.post('/complete', async (req, res) => {
     mediaKeyHex,
     ivHex,
     hmacHex,
+    mimeType,
   });
 
   logEvent('File upload complete (metadata stored)', { fileId, originalName, totalChunks });

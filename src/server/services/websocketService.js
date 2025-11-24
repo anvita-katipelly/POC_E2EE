@@ -216,6 +216,8 @@ function initializeWebSocket(httpServer) {
           fileId,
           originalName: originalName || meta.originalName,
           totalChunks: totalChunks || meta.totalChunks,
+          mimeType: data.mimeType,
+          size: data.size,
           timestamp: new Date().toISOString(),
           messageId: `file_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
         };
@@ -229,6 +231,7 @@ function initializeWebSocket(httpServer) {
             messageId: payload.messageId,
             to,
             timestamp: payload.timestamp,
+            fileId,
           });
           logEvent('File notification delivered', { from, to, fileId, messageId: payload.messageId });
         } else {
@@ -242,6 +245,7 @@ function initializeWebSocket(httpServer) {
             to,
             timestamp: payload.timestamp,
             status: 'offline',
+            fileId,
           });
           logEvent('File notification queued (recipient offline)', { from, to, fileId, messageId: payload.messageId });
         }

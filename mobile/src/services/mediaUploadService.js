@@ -3,211 +3,221 @@
  * Handles chunking, encryption, and upload of media files with E2EE
  */
 
-import mediaChunking from '../utils/mediaChunking';
-import encryptionService from './encryptionService';
+import { Platform } from 'react-native';
+import RNFS from 'react-native-fs';
+import { Buffer } from 'buffer';
+import { SERVER_URL } from '../config/config';
+import { encryptAndCompress, generateKeys } from './encryptionService';
 import socketService from './socketService';
+
+const CHUNK_SIZE = 512 * 1024; // 512 KB to match server defaults
+const TEMP_DIR = RNFS.TemporaryDirectoryPath || RNFS.CachesDirectoryPath;
 
 class MediaUploadService {
   constructor() {
-    this.activeUploads = new Map(); // uploadId -> upload state
+    this.activeUploads = new Map(); // fileId -> upload state
   }
 
   /**
-   * Upload a media file with E2EE
-   * @param {string} fileUri - Local file URI
-   * @param {string} fileName - Original filename
-   * @param {string} mimeType - MIME type of file
-   * @param {string} recipientPhone - Recipient's phone number
-   * @param {Function} onProgress - Progress callback (progress, uploadId)
-   * @returns {Promise<string>} Upload ID
+   * Upload a media file with E2EE and notify the recipient peer.
+   * @param {Object} options
+   * @param {string} options.fileUri - Local file URI
+   * @param {string} options.fileName - Original filename
+   * @param {string} options.mimeType - MIME type of file
+   * @param {string} options.recipientPhone - Recipient's phone number
+   * @param {Function} options.onProgress - Progress callback (progress, fileId)
+   * @returns {Promise<Object>} Upload result metadata
    */
-  async uploadMedia(fileUri, fileName, mimeType, recipientPhone, onProgress) {
-    const uploadId = `upload_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-    
+  async uploadMedia({ fileUri, fileName, mimeType, recipientPhone, onProgress }) {
+    const sanitizedName = this.sanitizeFileName(fileName);
+    const fileId = `${Date.now()}_${sanitizedName}`;
+
     try {
-      console.log(`[MediaUpload] Starting upload: ${uploadId}`);
-      console.log(`[MediaUpload] File: ${fileName}, Type: ${mimeType}, Size: ${fileUri}`);
-      
-      // Initialize upload state
-      this.activeUploads.set(uploadId, {
-        uploadId,
-        fileName,
+      console.log('[MediaUpload] Starting upload', { fileId, sanitizedName, mimeType });
+      this.activeUploads.set(fileId, {
+        fileId,
+        fileName: sanitizedName,
         mimeType,
         recipientPhone,
-        status: 'chunking',
+        status: 'preparing',
         progress: 0,
-        totalChunks: 0,
-        uploadedChunks: 0,
       });
 
-      // Step 1: Chunk the file
-      const chunks = await mediaChunking.chunkFile(fileUri);
-      const totalChunks = chunks.length;
-      const totalSize = chunks[0]?.totalSize || 0;
+      const sourcePath = await this.resolvePath(fileUri);
+      const { buffer: fileBuffer, size } = await this.readFileBuffer(sourcePath);
 
-      console.log(`[MediaUpload] File chunked into ${totalChunks} chunks (${mediaChunking.formatBytes(totalSize)})`);
+      const { mediaKey, iv } = generateKeys();
+      const { ciphertext, hmacHex } = encryptAndCompress(fileBuffer, mediaKey, iv);
+      const mediaKeyHex = Buffer.from(mediaKey).toString('hex');
+      const ivHex = Buffer.from(iv).toString('hex');
 
-      // Update state
-      const uploadState = this.activeUploads.get(uploadId);
-      uploadState.status = 'encrypting';
-      uploadState.totalChunks = totalChunks;
-      uploadState.totalSize = totalSize;
-
-      // Step 2: Generate encryption keys for this upload
-      const { mediaKey, iv } = encryptionService.generateKeys();
-      const mediaKeyBase64 = encryptionService.bufferToBase64(mediaKey);
-      const ivBase64 = encryptionService.bufferToBase64(iv);
-
-      console.log(`[MediaUpload] Generated encryption keys for upload`);
-
-      // Step 3: Encrypt and upload each chunk
+      const totalChunks = Math.ceil(ciphertext.length / CHUNK_SIZE);
+      const uploadState = this.activeUploads.get(fileId);
       uploadState.status = 'uploading';
-      const encryptedChunks = [];
+      uploadState.totalChunks = totalChunks;
+      uploadState.totalBytes = ciphertext.length;
 
-      for (let i = 0; i < chunks.length; i++) {
-        const chunk = chunks[i];
-        
-        console.log(`[MediaUpload] Processing chunk ${i + 1}/${totalChunks}`);
-        
-        // Validate chunk data
-        if (!chunk) {
-          console.error(`[MediaUpload] Chunk ${i + 1} is null or undefined!`);
-          throw new Error(`Chunk ${i + 1} is null - data loading failed`);
-        }
+      for (let index = 0; index < totalChunks; index++) {
+        const start = index * CHUNK_SIZE;
+        const end = Math.min(ciphertext.length, start + CHUNK_SIZE);
+        const chunkBuffer = ciphertext.slice(start, end);
 
-        if (!chunk.data) {
-          console.error(`[MediaUpload] Chunk ${i + 1} has no data property!`, {
-            chunkKeys: Object.keys(chunk),
-            chunkData: chunk.data,
-            chunkType: typeof chunk,
-          });
-          throw new Error(`Chunk ${i + 1} data is missing - check mediaChunking output`);
-        }
+        await this.uploadChunk(fileId, index, chunkBuffer);
+        uploadState.uploadedChunks = index + 1;
+        uploadState.progress = Math.round(((index + 1) / totalChunks) * 90); // Reserve 10% for finalize
 
-        if (typeof chunk.data !== 'string') {
-          console.error(`[MediaUpload] Chunk ${i + 1} data is not a string!`, {
-            dataType: typeof chunk.data,
-            isBuffer: Buffer.isBuffer(chunk.data),
-            dataValue: chunk.data,
-          });
-          throw new Error(`Chunk ${i + 1} data must be base64 string, got: ${typeof chunk.data}`);
-        }
-
-        if (chunk.data.length === 0) {
-          console.error(`[MediaUpload] Chunk ${i + 1} data is empty string!`);
-          throw new Error(`Chunk ${i + 1} data is empty`);
-        }
-
-        try {
-          console.log(`[MediaUpload] Encrypting chunk ${i + 1}/${totalChunks}`);
-          
-          // Convert base64 chunk data to Buffer
-          const chunkBuffer = encryptionService.base64ToBuffer(chunk.data);
-          console.log(`[MediaUpload] Chunk ${i + 1} converted to Buffer, length: ${chunkBuffer.length}`);
-          
-          // Encrypt chunk data
-          const { ciphertext, hmacHex } = encryptionService.encryptAndCompress(
-            chunkBuffer,
-            mediaKey,
-            iv
-          );
-
-          const encryptedChunk = {
-            uploadId,
-            index: chunk.index,
-            totalChunks: chunk.totalChunks,
-            encryptedData: encryptionService.bufferToBase64(ciphertext),
-            hmac: hmacHex,
-            size: chunk.size,
-            totalSize: chunk.totalSize,
-          };
-
-          encryptedChunks.push(encryptedChunk);
-
-          // Update progress
-          uploadState.uploadedChunks = i + 1;
-          uploadState.progress = Math.round((i + 1) / totalChunks * 100);
-          
-          if (onProgress) {
-            onProgress(uploadState.progress, uploadId);
-          }
-
-          console.log(`[MediaUpload] Chunk ${i + 1}/${totalChunks} encrypted (${uploadState.progress}%)`);
-        } catch (chunkError) {
-          console.error(`[MediaUpload] Error processing chunk ${i + 1}:`, chunkError);
-          throw new Error(`Failed to process chunk ${i + 1}: ${chunkError.message}`);
+        if (onProgress) {
+          onProgress(uploadState.progress, fileId);
         }
       }
 
-      // Step 4: Send media metadata and chunks to server
-      console.log(`[MediaUpload] Sending media to ${recipientPhone}`);
-      
-      await socketService.sendMedia({
-        uploadId,
-        fileName,
-        mimeType,
-        totalSize,
+      await this.completeUpload({
+        fileId,
+        fileName: sanitizedName,
         totalChunks,
-        recipientPhone,
-        mediaKey: mediaKeyBase64,
-        iv: ivBase64,
-        chunks: encryptedChunks,
+        mediaKeyHex,
+        ivHex,
+        hmacHex,
+        mimeType,
       });
 
-      // Mark as complete
+      uploadState.status = 'notifying';
+      uploadState.progress = 95;
+      if (onProgress) {
+        onProgress(uploadState.progress, fileId);
+      }
+
+      await socketService.sendFile({
+        to: recipientPhone,
+        fileId,
+        originalName: sanitizedName,
+        totalChunks,
+        mimeType,
+        size,
+      });
+
       uploadState.status = 'completed';
       uploadState.progress = 100;
-      
       if (onProgress) {
-        onProgress(100, uploadId);
+        onProgress(100, fileId);
       }
 
-      console.log(`[MediaUpload] Upload completed: ${uploadId}`);
-      
-      return uploadId;
+      console.log('[MediaUpload] Upload completed', { fileId, totalChunks });
+
+      return {
+        fileId,
+        fileName: sanitizedName,
+        mimeType,
+        totalChunks,
+        size,
+      };
     } catch (error) {
-      console.error('[MediaUpload] Upload failed:', error);
-      
-      const uploadState = this.activeUploads.get(uploadId);
+      console.error('[MediaUpload] Upload failed', error);
+      const uploadState = this.activeUploads.get(fileId);
       if (uploadState) {
         uploadState.status = 'failed';
         uploadState.error = error.message;
       }
-      
       throw error;
     }
   }
 
-  /**
-   * Get upload state
-   * @param {string} uploadId - Upload ID
-   * @returns {Object|null} Upload state or null
-   */
-  getUploadState(uploadId) {
-    return this.activeUploads.get(uploadId) || null;
-  }
+  async uploadChunk(fileId, chunkIndex, chunkBuffer) {
+    const tempPath = `${TEMP_DIR}/chunk_${fileId}_${chunkIndex}`;
+    await RNFS.writeFile(tempPath, chunkBuffer.toString('base64'), 'base64');
+    const chunkUri = Platform.OS === 'android' ? `file://${tempPath}` : tempPath;
 
-  /**
-   * Cancel an active upload
-   * @param {string} uploadId - Upload ID to cancel
-   */
-  cancelUpload(uploadId) {
-    const uploadState = this.activeUploads.get(uploadId);
-    if (uploadState) {
-      uploadState.status = 'cancelled';
-      console.log(`[MediaUpload] Upload cancelled: ${uploadId}`);
+    const formData = new FormData();
+    formData.append('fileId', fileId);
+    formData.append('chunkIndex', String(chunkIndex));
+    formData.append('chunk', {
+      uri: chunkUri,
+      name: `${chunkIndex}.chunk`,
+      type: 'application/octet-stream',
+    });
+
+    const response = await fetch(`${SERVER_URL}/upload-chunk`, {
+      method: 'POST',
+      body: formData,
+    });
+
+    await RNFS.unlink(tempPath).catch(() => null);
+
+    if (!response.ok) {
+      const message = await response.text();
+      throw new Error(message || `Failed to upload chunk ${chunkIndex}`);
     }
   }
 
-  /**
-   * Clear upload state
-   * @param {string} uploadId - Upload ID to clear
-   */
-  clearUpload(uploadId) {
-    this.activeUploads.delete(uploadId);
+  async completeUpload({ fileId, fileName, totalChunks, mediaKeyHex, ivHex, hmacHex, mimeType }) {
+    const response = await fetch(`${SERVER_URL}/complete`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        fileId,
+        originalName: fileName,
+        totalChunks,
+        mediaKeyHex,
+        ivHex,
+        hmacHex,
+        mimeType,
+      }),
+    });
+
+    if (!response.ok) {
+      const message = await response.text();
+      throw new Error(message || 'Failed to finalize upload');
+    }
+  }
+
+  async resolvePath(uri) {
+    if (!uri) {
+      throw new Error('Invalid file URI');
+    }
+
+    if (uri.startsWith('file://')) {
+      return uri.replace('file://', '');
+    }
+
+    if (Platform.OS === 'android' && uri.startsWith('content://')) {
+      const tempPath = `${TEMP_DIR}/media_${Date.now()}`;
+      await RNFS.copyFile(uri, tempPath);
+      return tempPath;
+    }
+
+    return uri;
+  }
+
+  async readFileBuffer(path) {
+    const stat = await RNFS.stat(path);
+    const base64Data = await RNFS.readFile(path, 'base64');
+    const buffer = Buffer.from(base64Data, 'base64');
+    return { buffer, size: Number(stat.size) };
+  }
+
+  sanitizeFileName(name) {
+    if (!name) {
+      return `media_${Date.now()}`;
+    }
+    return name.replace(/\s+/g, '_');
+  }
+
+  formatBytes(bytes) {
+    if (!bytes && bytes !== 0) return '0 B';
+    const units = ['B', 'KB', 'MB', 'GB'];
+    const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+    const value = bytes / Math.pow(1024, index);
+    return `${value.toFixed(1)} ${units[index]}`;
+  }
+
+  getUploadState(fileId) {
+    return this.activeUploads.get(fileId) || null;
+  }
+
+  clearUpload(fileId) {
+    this.activeUploads.delete(fileId);
   }
 }
 
-// Export singleton instance
 export default new MediaUploadService();
 

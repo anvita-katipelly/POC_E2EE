@@ -16,6 +16,8 @@
     "base64-js": "^1.5.1",
     "buffer": "^6.0.3",
     "pako": "^2.1.0",
+    "react-native-fs": "^2.20.0",
+    "react-native-image-picker": "^7.1.2",
     "react": "18.2.0",
     "react-native": "0.73.2",
     "react-native-contacts": "^7.0.8",
