@@ -21,7 +21,7 @@ import webrtcService from '../services/webrtcService';
 import mediaUploadService from '../services/mediaUploadService';
 import { launchImageLibrary, launchCamera } from 'react-native-image-picker';
 import DocumentPicker from 'react-native-document-picker';
-import { COLORS, STYLES, SERVER_URL } from '../config/config';
+import { COLORS, STYLES } from '../config/config';
 import RNFS from 'react-native-fs';
 
 const isImageAttachment = (message) => {
@@ -405,16 +405,53 @@ const ChatScreen = ({ navigation, route }) => {
     }
 
     try {
-      const destinationDir = getDownloadDirectory();
-      await ensureDirectoryExists(destinationDir);
-
-      const safeName = sanitizeFileName(message.fileName || `${message.id}.bin`);
-      const destinationPath = `${destinationDir}/${safeName}`;
       const sourcePath = stripFileScheme(message.localUri);
-
-      await RNFS.copyFile(sourcePath, destinationPath);
-
-      Alert.alert('Saved', `File stored at:\n${destinationPath}`);
+      
+      if (Platform.OS === 'ios') {
+        // On iOS, save to Photos library for images/videos, or use share sheet for other files
+        const isImage = isImageAttachment(message);
+        const isVideo = message.mimeType?.startsWith('video/');
+        
+        if (isImage || isVideo) {
+          // For iOS, we'll use Linking to open the file, which allows saving to Photos
+          // Or we can copy to a temp location and use share functionality
+          const { Linking } = require('react-native');
+          const connectionStatus = socketService.getConnectionStatus();
+          const serverUrl = connectionStatus.serverUrl || 'http://10.0.2.2:3000';
+          const downloadUrl = `${serverUrl}/receive/${message.fileId}`;
+          
+          // Open the download URL which will trigger iOS share sheet
+          const canOpen = await Linking.canOpenURL(downloadUrl);
+          if (canOpen) {
+            await Linking.openURL(downloadUrl);
+            Alert.alert('Open in Browser', 'The file will open in Safari. Use the share button to save to Photos or Files.');
+          } else {
+            // Fallback: copy to Documents and show path
+            const destinationDir = getDownloadDirectory();
+            await ensureDirectoryExists(destinationDir);
+            const safeName = sanitizeFileName(message.fileName || `${message.id}.bin`);
+            const destinationPath = `${destinationDir}/${safeName}`;
+            await RNFS.copyFile(sourcePath, destinationPath);
+            Alert.alert('Saved', `File saved to app storage.\n\nTo access: Open Files app > On My iPhone > IMPLI > E2EE`);
+          }
+        } else {
+          // For other files, save to Documents directory
+          const destinationDir = getDownloadDirectory();
+          await ensureDirectoryExists(destinationDir);
+          const safeName = sanitizeFileName(message.fileName || `${message.id}.bin`);
+          const destinationPath = `${destinationDir}/${safeName}`;
+          await RNFS.copyFile(sourcePath, destinationPath);
+          Alert.alert('Saved', `File saved to app storage.\n\nTo access: Open Files app > On My iPhone > IMPLI > E2EE`);
+        }
+      } else {
+        // Android: save to Downloads folder
+        const destinationDir = getDownloadDirectory();
+        await ensureDirectoryExists(destinationDir);
+        const safeName = sanitizeFileName(message.fileName || `${message.id}.bin`);
+        const destinationPath = `${destinationDir}/${safeName}`;
+        await RNFS.copyFile(sourcePath, destinationPath);
+        Alert.alert('Saved', `File saved to:\n${destinationPath}`);
+      }
     } catch (error) {
       console.error('[ChatScreen] Failed to save media:', error);
       Alert.alert('Save failed', error.message || 'Unable to save file to device.');
@@ -520,10 +557,14 @@ const ChatScreen = ({ navigation, route }) => {
         return;
       }
 
-      const downloadUrl = `${SERVER_URL}/receive/${message.fileId}`;
+      const connectionStatus = socketService.getConnectionStatus();
+      const serverUrl = connectionStatus.serverUrl || 'http://10.0.2.2:3000';
+      const downloadUrl = `${serverUrl}/receive/${message.fileId}`;
       const safeName = sanitizeFileName(message.fileName || message.fileId);
       const localPath = `${RNFS.CachesDirectoryPath}/e2ee_${safeName}`;
       const displayUri = `file://${localPath}`;
+
+      console.log('[ChatScreen] Downloading media:', { downloadUrl, fileId: message.fileId, serverUrl });
 
       setMessages((prev) =>
         prev.map((msg) =>
@@ -551,8 +592,10 @@ const ChatScreen = ({ navigation, route }) => {
         return displayUri;
       } catch (error) {
         console.error('[ChatScreen] Failed to download media:', error);
+        console.error('[ChatScreen] Download URL was:', downloadUrl);
+        console.error('[ChatScreen] Server URL from socket:', serverUrl);
         if (!options.silent) {
-          Alert.alert('Download failed', error.message || 'Unable to download media');
+          Alert.alert('Download failed', `${error.message || 'Unable to download media'}\n\nURL: ${downloadUrl.substring(0, 80)}...`);
         }
         setMessages((prev) =>
           prev.map((msg) =>
@@ -563,7 +606,7 @@ const ChatScreen = ({ navigation, route }) => {
         throw error;
       }
     },
-    [SERVER_URL, updateStoredMessage]
+    [updateStoredMessage]
   );
 
   useEffect(() => {

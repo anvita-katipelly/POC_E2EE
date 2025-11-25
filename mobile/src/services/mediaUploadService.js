@@ -6,7 +6,6 @@
 import { Platform } from 'react-native';
 import RNFS from 'react-native-fs';
 import { Buffer } from 'buffer';
-import { SERVER_URL } from '../config/config';
 import { encryptAndCompress, generateKeys } from './encryptionService';
 import socketService from './socketService';
 
@@ -127,6 +126,9 @@ class MediaUploadService {
     await RNFS.writeFile(tempPath, chunkBuffer.toString('base64'), 'base64');
     const chunkUri = Platform.OS === 'android' ? `file://${tempPath}` : tempPath;
 
+    const connectionStatus = socketService.getConnectionStatus();
+    const serverUrl = connectionStatus.serverUrl || 'http://10.0.2.2:3000';
+
     const formData = new FormData();
     formData.append('fileId', fileId);
     formData.append('chunkIndex', String(chunkIndex));
@@ -136,7 +138,7 @@ class MediaUploadService {
       type: 'application/octet-stream',
     });
 
-    const response = await fetch(`${SERVER_URL}/upload-chunk`, {
+    const response = await fetch(`${serverUrl}/upload-chunk`, {
       method: 'POST',
       body: formData,
     });
@@ -150,7 +152,9 @@ class MediaUploadService {
   }
 
   async completeUpload({ fileId, fileName, totalChunks, mediaKeyHex, ivHex, hmacHex, mimeType }) {
-    const response = await fetch(`${SERVER_URL}/complete`, {
+    const connectionStatus = socketService.getConnectionStatus();
+    const serverUrl = connectionStatus.serverUrl || 'http://10.0.2.2:3000';
+    const response = await fetch(`${serverUrl}/complete`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
