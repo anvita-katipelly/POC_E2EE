@@ -34,8 +34,38 @@ const CallScreen = ({ route, navigation }) => {
 
     // Set up WebRTC callbacks
     webrtcService.onStateChange = (state) => {
-      console.log('[CallScreen] State changed:', state.callState);
+      console.log('[CallScreen] State changed:', {
+        callState: state.callState,
+        hasLocalStream: !!state.localStream,
+        hasRemoteStream: !!state.remoteStream,
+        localStreamId: state.localStream?.id,
+        remoteStreamId: state.remoteStream?.id,
+      });
       setCallState(state);
+      
+      // Update local stream when state changes
+      if (state.localStream) {
+        setLocalStream(prevStream => {
+          // Update if stream changed or wasn't set
+          if (!prevStream || prevStream.id !== state.localStream.id) {
+            console.log('[CallScreen] Local stream updated from state change:', state.localStream.id);
+            return state.localStream;
+          }
+          return prevStream;
+        });
+      } else {
+        console.log('[CallScreen] State change without local stream');
+      }
+      
+      // Update remote stream when state changes
+      if (state.remoteStream) {
+        setRemoteStream(prevStream => {
+          if (!prevStream || prevStream.id !== state.remoteStream.id) {
+            return state.remoteStream;
+          }
+          return prevStream;
+        });
+      }
       
       // Navigate back if call ended
       if (state.callState === 'ended' || state.callState === 'idle') {
@@ -66,10 +96,60 @@ const CallScreen = ({ route, navigation }) => {
       socketService.sendIceCandidate(peerPhone, candidate);
     };
 
-    // Set initial local stream
-    const currentState = webrtcService.getState();
-    setLocalStream(currentState.localStream);
-    setCallState(currentState);
+    // Set initial local stream and update when state changes
+    const updateLocalStream = () => {
+      const currentState = webrtcService.getState();
+      console.log('[CallScreen] Getting initial state:', {
+        hasLocalStream: !!currentState.localStream,
+        hasRemoteStream: !!currentState.remoteStream,
+        callState: currentState.callState,
+        localStreamId: currentState.localStream?.id,
+        remoteStreamId: currentState.remoteStream?.id,
+      });
+      if (currentState.localStream) {
+        console.log('[CallScreen] Setting initial local stream:', {
+          id: currentState.localStream.id,
+          hasVideoTracks: currentState.localStream.getVideoTracks?.()?.length > 0,
+          hasAudioTracks: currentState.localStream.getAudioTracks?.()?.length > 0,
+          streamURL: currentState.localStream.toURL(),
+        });
+        setLocalStream(currentState.localStream);
+      } else {
+        console.log('[CallScreen] No local stream in initial state');
+      }
+      if (currentState.remoteStream) {
+        console.log('[CallScreen] Setting initial remote stream:', currentState.remoteStream.id);
+        setRemoteStream(currentState.remoteStream);
+      }
+      setCallState(currentState);
+    };
+    
+    updateLocalStream();
+    
+    // Poll for local stream updates (in case it's set asynchronously)
+    const localStreamCheckInterval = setInterval(() => {
+      const currentState = webrtcService.getState();
+      if (currentState.localStream) {
+        setLocalStream(prevStream => {
+          // Update if stream changed or wasn't set
+          if (!prevStream || prevStream.id !== currentState.localStream.id) {
+            console.log('[CallScreen] Local stream updated via polling:', currentState.localStream.id);
+            return currentState.localStream;
+          }
+          return prevStream;
+        });
+      }
+      if (currentState.remoteStream) {
+        setRemoteStream(prevStream => {
+          if (!prevStream || prevStream.id !== currentState.remoteStream.id) {
+            return currentState.remoteStream;
+          }
+          return prevStream;
+        });
+      }
+      // Also update call state
+      setCallState(currentState);
+    }, 500);
 
     // Listen for call end from other peer
     const handleCallEnded = (data) => {
@@ -137,6 +217,10 @@ const CallScreen = ({ route, navigation }) => {
         clearInterval(callTimerRef.current);
         callTimerRef.current = null;
       }
+      
+      if (localStreamCheckInterval) {
+        clearInterval(localStreamCheckInterval);
+      }
     };
   }, [normalizedPeerPhone, isVideo, isOutgoing, navigation]);
 
@@ -196,13 +280,15 @@ const CallScreen = ({ route, navigation }) => {
           )}
 
           {/* Local Video (Small overlay) */}
-          {localStream && callState.isVideoEnabled && (
+          {localStream && (
             <View style={styles.localVideoContainer}>
               <RTCView
+                key={`local-${localStream.id}`}
                 streamURL={localStream.toURL()}
                 style={styles.localVideo}
                 objectFit="cover"
                 mirror={true}
+                zOrder={1}
               />
             </View>
           )}

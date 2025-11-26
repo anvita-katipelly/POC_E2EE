@@ -53,6 +53,7 @@ class WebRTCService {
 
       // Get local media stream
       await this._getLocalStream(isVideo);
+      this._notifyStateChange(); // Notify that local stream is ready
 
       // Create peer connection
       this._createPeerConnection();
@@ -100,6 +101,7 @@ class WebRTCService {
 
       // Get local media stream
       await this._getLocalStream(callData.isVideo);
+      this._notifyStateChange(); // Notify that local stream is ready
 
       // Create peer connection
       this._createPeerConnection();
@@ -428,9 +430,17 @@ class WebRTCService {
 
     // Add local stream tracks
     if (this.localStream) {
-      this.localStream.getTracks().forEach(track => {
+      const tracks = this.localStream.getTracks();
+      console.log('[WebRTC] Adding local stream tracks:', tracks.length);
+      tracks.forEach(track => {
+        console.log('[WebRTC] Adding track:', track.kind, 'enabled:', track.enabled, 'readyState:', track.readyState);
+        // Ensure track is enabled
+        track.enabled = true;
         this.peerConnection.addTrack(track, this.localStream);
       });
+      console.log('[WebRTC] Local stream tracks added to peer connection');
+    } else {
+      console.warn('[WebRTC] No local stream available when creating peer connection');
     }
 
     // Handle ICE candidates
@@ -539,6 +549,8 @@ class WebRTCService {
         isVideoEnabled: this.isVideoEnabled,
         isSpeakerOn: this.isSpeakerOn,
         currentCallPeer: this.currentCallPeer,
+        localStream: this.localStream,
+        remoteStream: this.remoteStream,
       });
     }
   }
