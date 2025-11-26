@@ -180,7 +180,8 @@ class MediaUploadService {
     }
 
     if (uri.startsWith('file://')) {
-      return uri.replace('file://', '');
+      const decoded = decodeURIComponent(uri.replace('file://', ''));
+      return decoded;
     }
 
     if (Platform.OS === 'android' && uri.startsWith('content://')) {
@@ -189,7 +190,7 @@ class MediaUploadService {
       return tempPath;
     }
 
-    return uri;
+    return decodeURIComponent(uri);
   }
 
   async readFileBuffer(path) {

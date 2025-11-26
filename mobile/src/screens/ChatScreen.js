@@ -4,6 +4,7 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
+  TouchableWithoutFeedback,
   StyleSheet,
   FlatList,
   KeyboardAvoidingView,
@@ -12,6 +13,7 @@ import {
   ActivityIndicator,
   PermissionsAndroid,
   Image,
+  Modal,
 } from 'react-native';
 import socketService from '../services/socketService';
 import messageStorage from '../services/messageStorage';
@@ -49,6 +51,18 @@ const getDownloadDirectory = () => {
   return `${RNFS.DocumentDirectoryPath}/E2EE`;
 };
 
+const formatContactLabel = (name, phone) => {
+  if (!phone) {
+    return name || '';
+  }
+  if (!name || name === phone) {
+    return phone;
+  }
+  return `${name} (${phone})`;
+};
+
+const REACTION_OPTIONS = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
+
 const stripFileScheme = (uri = '') => uri.replace(/^file:\/\//, '');
 const ensureDirectoryExists = async (dirPath) => {
   try {
@@ -81,6 +95,7 @@ const ChatScreen = ({ navigation, route }) => {
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [pendingMediaMessageId, setPendingMediaMessageId] = useState(null);
+  const [reactionTarget, setReactionTarget] = useState(null);
   const flatListRef = useRef(null);
   const autoDownloadQueue = useRef(new Set());
   const conversationId = messageStorage.getConversationId(normalizedMyPhone, normalizedPeerPhone);
@@ -127,8 +142,9 @@ const ChatScreen = ({ navigation, route }) => {
   useEffect(() => {
     // Set navigation header with contact name and call buttons
     const displayName = contactsService.getDisplayName(peerPhone);
+    const headerTitle = formatContactLabel(displayName, peerPhone);
     navigation.setOptions({
-      title: displayName || 'Chat',
+      title: headerTitle || 'Chat',
       headerBackTitle: 'Back',
       headerRight: () => (
         <View style={{ flexDirection: 'row', marginRight: 10 }}>
@@ -273,6 +289,44 @@ const ChatScreen = ({ navigation, route }) => {
     },
     [conversationId]
   );
+
+  const handleMessageLongPress = useCallback((message) => {
+    if (message.type !== 'text') {
+      return;
+    }
+    setReactionTarget(message);
+  }, []);
+
+  const handleReactionSelect = useCallback(
+    async (emoji) => {
+      if (!reactionTarget) {
+        return;
+      }
+      const targetId = reactionTarget.id;
+      setMessages((prev) =>
+        prev.map((msg) => (msg.id === targetId ? { ...msg, reaction: emoji } : msg))
+      );
+      await updateStoredMessage(targetId, { reaction: emoji });
+      setReactionTarget(null);
+    },
+    [reactionTarget, updateStoredMessage]
+  );
+
+  const handleReactionClear = useCallback(async () => {
+    if (!reactionTarget) {
+      return;
+    }
+    const targetId = reactionTarget.id;
+    setMessages((prev) =>
+      prev.map((msg) => (msg.id === targetId ? { ...msg, reaction: undefined } : msg))
+    );
+    await updateStoredMessage(targetId, { reaction: undefined });
+    setReactionTarget(null);
+  }, [reactionTarget, updateStoredMessage]);
+
+  const closeReactionPicker = useCallback(() => {
+    setReactionTarget(null);
+  }, []);
 
   const handleAttachPress = () => {
     if (isUploading) {
@@ -856,24 +910,26 @@ const ChatScreen = ({ navigation, route }) => {
   };
 
   const renderMessage = ({ item }) => {
-    const isMyMessage = item.isSent;
+    const isMyMessage = item.from === normalizedMyPhone;
     const isFileMessage = item.type === 'file';
     const showImagePreview = isFileMessage && isImageAttachment(item);
     const hasLocalPreview = showImagePreview && !!item.localUri;
+
     return (
-      <View
-        style={[
-          styles.messageContainer,
-          isMyMessage ? styles.myMessageContainer : styles.peerMessageContainer,
-        ]}
-      >
+      <TouchableWithoutFeedback onLongPress={() => handleMessageLongPress(item)}>
         <View
           style={[
-            styles.messageBubble,
-            isMyMessage ? styles.myMessageBubble : styles.peerMessageBubble,
+            styles.messageContainer,
+            isMyMessage ? styles.myMessageContainer : styles.peerMessageContainer,
           ]}
         >
-          {isFileMessage ? (
+          <View
+            style={[
+              styles.messageBubble,
+              isMyMessage ? styles.myMessageBubble : styles.peerMessageBubble,
+            ]}
+          >
+            {isFileMessage ? (
             <View style={styles.attachmentContainer}>
               {showImagePreview && (
                 hasLocalPreview ? (
@@ -940,7 +996,7 @@ const ChatScreen = ({ navigation, route }) => {
                 </View>
               )}
             </View>
-          ) : (
+            ) : (
             <Text
               style={[
                 styles.messageText,
@@ -950,16 +1006,27 @@ const ChatScreen = ({ navigation, route }) => {
               {item.text}
             </Text>
           )}
-          <Text
-            style={[
-              styles.messageTime,
-              isMyMessage ? styles.myMessageTime : styles.peerMessageTime,
-            ]}
-          >
-            {formatTime(item.timestamp)}
-          </Text>
+            {item.reaction && (
+              <View
+                style={[
+                  styles.reactionTag,
+                  isMyMessage ? styles.myReactionTag : styles.peerReactionTag,
+                ]}
+              >
+                <Text style={styles.reactionTagText}>{item.reaction}</Text>
+              </View>
+            )}
+            <Text
+              style={[
+                styles.messageTime,
+                isMyMessage ? styles.myMessageTime : styles.peerMessageTime,
+              ]}
+            >
+              {formatTime(item.timestamp)}
+            </Text>
+          </View>
         </View>
-      </View>
+      </TouchableWithoutFeedback>
     );
   };
 
@@ -973,58 +1040,91 @@ const ChatScreen = ({ navigation, route }) => {
   }
 
   return (
-    <KeyboardAvoidingView
-      style={styles.container}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
-    >
-      <FlatList
-        ref={flatListRef}
-        data={messages}
-        renderItem={renderMessage}
-        keyExtractor={(item) => item.id}
-        contentContainerStyle={styles.messagesList}
-        onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })}
-      />
-
-      <View style={styles.inputContainer}>
-        <TouchableOpacity
-          style={[
-            styles.attachButton,
-            (isUploading || isSending) && styles.attachButtonDisabled,
-          ]}
-          onPress={handleAttachPress}
-          disabled={isUploading || isSending}
-        >
-          <Text style={styles.attachButtonText}>📎</Text>
-        </TouchableOpacity>
-        <TextInput
-          style={styles.input}
-          placeholder="Type a message..."
-          placeholderTextColor={COLORS.textSecondary}
-          value={inputText}
-          onChangeText={setInputText}
-          multiline
-          maxLength={1000}
-          editable={!isSending}
+    <>
+      <KeyboardAvoidingView
+        style={styles.container}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
+      >
+        <FlatList
+          ref={flatListRef}
+          data={messages}
+          renderItem={renderMessage}
+          keyExtractor={(item) => item.id}
+          contentContainerStyle={styles.messagesList}
+          onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })}
         />
-        <TouchableOpacity
-          style={[styles.sendButton, (!inputText.trim() || isSending) && styles.sendButtonDisabled]}
-          onPress={() => {
-            console.log('[ChatScreen] Send button pressed');
-            handleSend();
-          }}
-          disabled={!inputText.trim() || isSending}
-        >
-          <Text style={styles.sendButtonText}>Send</Text>
-        </TouchableOpacity>
-      </View>
-      {isUploading && (
-        <Text style={styles.uploadStatus}>
-          Uploading media... {uploadProgress}%
-        </Text>
-      )}
-    </KeyboardAvoidingView>
+
+        <View style={styles.inputContainer}>
+          <TouchableOpacity
+            style={[
+              styles.attachButton,
+              (isUploading || isSending) && styles.attachButtonDisabled,
+            ]}
+            onPress={handleAttachPress}
+            disabled={isUploading || isSending}
+          >
+            <Text style={styles.attachButtonText}>📎</Text>
+          </TouchableOpacity>
+          <TextInput
+            style={styles.input}
+            placeholder="Type a message..."
+            placeholderTextColor={COLORS.textSecondary}
+            value={inputText}
+            onChangeText={setInputText}
+            multiline
+            maxLength={1000}
+            editable={!isSending}
+          />
+          <TouchableOpacity
+            style={[styles.sendButton, (!inputText.trim() || isSending) && styles.sendButtonDisabled]}
+            onPress={() => {
+              console.log('[ChatScreen] Send button pressed');
+              handleSend();
+            }}
+            disabled={!inputText.trim() || isSending}
+          >
+            <Text style={styles.sendButtonText}>Send</Text>
+          </TouchableOpacity>
+        </View>
+        {isUploading && (
+          <Text style={styles.uploadStatus}>
+            Uploading media... {uploadProgress}%
+          </Text>
+        )}
+      </KeyboardAvoidingView>
+
+      <Modal
+        visible={!!reactionTarget}
+        transparent
+        animationType="fade"
+        onRequestClose={closeReactionPicker}
+      >
+        <TouchableWithoutFeedback onPress={closeReactionPicker}>
+          <View style={styles.reactionOverlay}>
+            <View style={styles.reactionPicker}>
+              {REACTION_OPTIONS.map((emoji) => (
+                <TouchableOpacity
+                  key={emoji}
+                  style={styles.reactionEmojiButton}
+                  onPress={() => handleReactionSelect(emoji)}
+                >
+                  <Text style={styles.reactionEmoji}>{emoji}</Text>
+                </TouchableOpacity>
+              ))}
+              {reactionTarget?.reaction && (
+                <TouchableOpacity
+                  style={styles.reactionClearButton}
+                  onPress={handleReactionClear}
+                >
+                  <Text style={styles.reactionClearText}>Remove</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          </View>
+        </TouchableWithoutFeedback>
+      </Modal>
+    </>
   );
 };
 
@@ -1088,6 +1188,56 @@ const styles = StyleSheet.create({
   },
   peerMessageTime: {
     color: COLORS.textSecondary,
+  },
+  reactionTag: {
+    marginTop: STYLES.spacing.xs,
+    alignSelf: 'flex-start',
+    backgroundColor: COLORS.surface,
+    paddingHorizontal: STYLES.spacing.xs,
+    paddingVertical: 2,
+    borderRadius: STYLES.borderRadius.sm,
+  },
+  myReactionTag: {
+    alignSelf: 'flex-end',
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+  },
+  peerReactionTag: {
+    backgroundColor: 'rgba(0, 0, 0, 0.05)',
+  },
+  reactionTagText: {
+    fontSize: 16,
+  },
+  reactionOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.4)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: STYLES.spacing.md,
+  },
+  reactionPicker: {
+    backgroundColor: COLORS.surface,
+    borderRadius: STYLES.borderRadius.lg,
+    paddingVertical: STYLES.spacing.sm,
+    paddingHorizontal: STYLES.spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  reactionEmojiButton: {
+    marginHorizontal: 6,
+  },
+  reactionEmoji: {
+    fontSize: 26,
+  },
+  reactionClearButton: {
+    marginLeft: STYLES.spacing.sm,
+    paddingHorizontal: STYLES.spacing.sm,
+    paddingVertical: 4,
+    borderRadius: STYLES.borderRadius.sm,
+    backgroundColor: COLORS.border,
+  },
+  reactionClearText: {
+    fontSize: 12,
+    color: COLORS.text,
   },
   inputContainer: {
     flexDirection: 'row',

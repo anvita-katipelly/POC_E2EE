@@ -18,7 +18,7 @@ import { COLORS, STYLES } from '../config/config';
 
 const PeersListScreen = ({ navigation, route }) => {
   const { phoneNumber } = route.params || {};
-  const normalizedMyPhone = phoneNumber?.replace(/[\s\-()]/g, '') || phoneNumber;
+  const normalizedMyPhone = phoneNumber?.replace(/[\s\-()]/g, '') || '';
   const [peers, setPeers] = useState([]);
   const [conversations, setConversations] = useState({});
   const [isLoading, setIsLoading] = useState(false);
@@ -26,6 +26,21 @@ const PeersListScreen = ({ navigation, route }) => {
   const [contactsLoaded, setContactsLoaded] = useState(false);
   const [allContacts, setAllContacts] = useState([]);
   const [combinedList, setCombinedList] = useState([]);
+  const [activeTab, setActiveTab] = useState('contacts');
+  const [callLogs, setCallLogs] = useState([]);
+  const [loadingCallLogs, setLoadingCallLogs] = useState(false);
+  const [callLogsRefreshing, setCallLogsRefreshing] = useState(false);
+
+  const formatDisplayLabel = useCallback((phone) => {
+    if (!phone) {
+      return '';
+    }
+    const name = contactsService.getDisplayName(phone);
+    if (!name || name === phone) {
+      return phone;
+    }
+    return `${name} (${phone})`;
+  }, []);
 
   // Initialize global message handler
   useEffect(() => {
@@ -147,6 +162,10 @@ const PeersListScreen = ({ navigation, route }) => {
     loadConversations();
   }, [loadConversations]);
 
+  useEffect(() => {
+    loadCallLogs();
+  }, [loadCallLogs]);
+
   // Combine contacts, peers, and existing conversations into a single list
   useEffect(() => {
     const combineContactsAndPeers = () => {
@@ -167,6 +186,7 @@ const PeersListScreen = ({ navigation, route }) => {
           phoneNumber: contact.phoneNumber,
           isContact: true,
           isOnline: isOnline,
+          displayLabel: formatDisplayLabel(contact.phoneNumber),
         });
 
         processedPhones.add(normalizedPhone);
@@ -191,6 +211,7 @@ const PeersListScreen = ({ navigation, route }) => {
             phoneNumber: peer.phoneNumber,
             isContact: false,
             isOnline: true,
+            displayLabel: formatDisplayLabel(peer.phoneNumber),
           });
           processedPhones.add(normalizedPeerPhone);
           if (last10) {
@@ -200,7 +221,6 @@ const PeersListScreen = ({ navigation, route }) => {
       });
 
       // Add people from existing conversations (even if offline and not in contacts)
-      const normalizedMyPhone = phoneNumber.replace(/[\s\-()]/g, '');
       Object.keys(conversations).forEach(conversationId => {
         // Extract the other person's phone number from conversation ID
         // conversationId format: "phone1_phone2"
@@ -230,6 +250,7 @@ const PeersListScreen = ({ navigation, route }) => {
             isContact: hasName,
             isOnline: isOnline,
             hasConversation: true, // Flag to indicate this is from chat history
+            displayLabel: formatDisplayLabel(otherPhone),
           });
           
           processedPhones.add(normalizedOtherPhone);
@@ -284,14 +305,15 @@ const PeersListScreen = ({ navigation, route }) => {
   }, [allContacts, peers, conversations, phoneNumber]);
 
   useEffect(() => {
-    // Reload conversations when screen comes into focus
+    // Reload data when screen comes into focus
     const unsubscribe = navigation.addListener('focus', () => {
-      console.log('[PeersListScreen] Screen focused, reloading conversations');
+      console.log('[PeersListScreen] Screen focused, reloading data');
       loadConversations();
+      loadCallLogs();
     });
 
     return unsubscribe;
-  }, [navigation, loadConversations]);
+  }, [navigation, loadConversations, loadCallLogs]);
 
   // Listen for incoming messages to update conversation list in real-time
   useEffect(() => {
@@ -385,10 +407,57 @@ const PeersListScreen = ({ navigation, route }) => {
     requestPeers();
   }, []);
 
+  const loadCallLogs = useCallback(async () => {
+    if (!normalizedMyPhone) {
+      setCallLogs([]);
+      return;
+    }
+    setLoadingCallLogs(true);
+    try {
+      const conversationsList = await messageStorage.getConversations();
+      const logs = [];
+      for (const conversation of conversationsList) {
+        const messages = await messageStorage.getMessages(conversation.id);
+        const [phone1, phone2] = conversation.id.split('_');
+        const otherPhone = phone1 === normalizedMyPhone ? phone2 : phone1;
+        messages.forEach((msg) => {
+          if (msg.type === 'call') {
+            logs.push({
+              ...msg,
+              conversationId: conversation.id,
+              otherPhone,
+              displayName: formatDisplayLabel(otherPhone),
+            });
+          }
+        });
+      }
+      logs.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+      setCallLogs(logs);
+    } catch (error) {
+      console.error('[PeersListScreen] Failed to load call logs:', error);
+    } finally {
+      setLoadingCallLogs(false);
+      setCallLogsRefreshing(false);
+    }
+  }, [normalizedMyPhone, formatDisplayLabel]);
+
+  const handleCallLogsRefresh = useCallback(() => {
+    setCallLogsRefreshing(true);
+    loadCallLogs();
+  }, [loadCallLogs]);
+
+  const handleTabChange = useCallback(
+    (tab) => {
+      setActiveTab(tab);
+      if (tab === 'callLogs') {
+        loadCallLogs();
+      }
+    },
+    [loadCallLogs]
+  );
+
   const handlePeerPress = (item) => {
-    // Normalize phone numbers (remove spaces, dashes, parentheses)
     const normalizedPeerPhone = item.phoneNumber?.replace(/[\s\-()]/g, '');
-    const normalizedMyPhone = phoneNumber?.replace(/[\s\-()]/g, '');
     
     const conversationId = messageStorage.getConversationId(normalizedMyPhone, normalizedPeerPhone);
     const hasConversation = conversations[conversationId] !== undefined;
@@ -479,15 +548,13 @@ const PeersListScreen = ({ navigation, route }) => {
 
   const renderPeer = ({ item }) => {
     // Normalize phone numbers for conversation ID lookup
-    const normalizedMyPhone = phoneNumber?.replace(/[\s\-()]/g, '');
-    const normalizedPeerPhone = item.phoneNumber?.replace(/[\s\-()]/g, '');
+        const normalizedPeerPhone = item.phoneNumber?.replace(/[\s\-()]/g, '');
     
     const conversationId = messageStorage.getConversationId(normalizedMyPhone, normalizedPeerPhone);
     const conversation = conversations[conversationId];
     
-    // Use name from combined list or phone number
-    const displayName = item.name || item.phoneNumber;
-    const hasName = item.name !== null;
+        // Use formatted label with phone number
+        const displayName = item.displayLabel || formatDisplayLabel(item.phoneNumber);
 
     return (
       <TouchableOpacity
@@ -511,9 +578,6 @@ const PeersListScreen = ({ navigation, route }) => {
               <View style={styles.onlineIndicator} />
             )}
           </View>
-          {hasName && (
-            <Text style={styles.peerPhone}>{item.phoneNumber}</Text>
-          )}
           {conversation?.lastMessage ? (
             <Text 
               style={[
@@ -552,6 +616,64 @@ const PeersListScreen = ({ navigation, route }) => {
     );
   };
 
+  const handleCallLogPress = (log) => {
+    const normalizedPeerPhone = log.otherPhone?.replace(/[\s\-()]/g, '');
+    if (!normalizedPeerPhone) {
+      return;
+    }
+    navigation.navigate('Chat', {
+      peerPhone: normalizedPeerPhone,
+      myPhone: normalizedMyPhone,
+    });
+  };
+
+  const renderCallLog = ({ item }) => {
+    const isMissed = item.callStatus === 'missed';
+    const callTypeIcon = item.callType === 'video' ? '📹' : '📞';
+    const directionLabel = item.callDirection === 'outgoing' ? 'Outgoing' : 'Incoming';
+    const directionIcon = item.callDirection === 'outgoing' ? '⬆️' : '⬇️';
+    const statusLabel =
+      item.callStatus === 'completed'
+        ? item.durationText
+        : item.callStatus === 'missed'
+          ? 'Missed'
+          : 'Unanswered';
+
+    return (
+      <TouchableOpacity style={styles.callLogItem} onPress={() => handleCallLogPress(item)}>
+        <View style={styles.callLogIconWrapper}>
+          <Text style={styles.callLogIcon}>{callTypeIcon}</Text>
+        </View>
+        <View style={styles.callLogInfo}>
+          <Text style={[styles.callLogName, isMissed && styles.callLogMissed]}>
+            {item.displayName}
+          </Text>
+          <Text style={styles.callLogMeta}>
+            {directionIcon} {directionLabel} • {statusLabel}
+          </Text>
+        </View>
+        <Text style={styles.callLogTime}>{formatTime(item.timestamp)}</Text>
+      </TouchableOpacity>
+    );
+  };
+
+  const renderCallLogsEmpty = () => {
+    if (loadingCallLogs) {
+      return (
+        <View style={styles.emptyContainer}>
+          <ActivityIndicator size="large" color={COLORS.primary} />
+          <Text style={styles.emptyText}>Loading call history...</Text>
+        </View>
+      );
+    }
+    return (
+      <View style={styles.emptyContainer}>
+        <Text style={styles.emptyText}>No calls yet</Text>
+        <Text style={styles.emptySubtext}>Your recent calls will appear here</Text>
+      </View>
+    );
+  };
+
   const renderEmpty = () => {
     if (isLoading) {
       return (
@@ -582,33 +704,96 @@ const PeersListScreen = ({ navigation, route }) => {
     );
   };
 
+  const headerTitle = activeTab === 'contacts' ? 'Contacts' : 'Call Logs';
+  const headerSubtitle =
+    activeTab === 'contacts'
+      ? `You: ${phoneNumber || 'N/A'} • ${peers.length} online`
+      : `You: ${phoneNumber || 'N/A'} • ${callLogs.length} logs`;
+
   return (
     <View style={styles.container}>
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>Contacts</Text>
+        <Text style={styles.headerTitle}>{headerTitle}</Text>
         <Text style={styles.headerSubtitle}>
-          You: {phoneNumber} • {peers.length} online
+          {headerSubtitle}
         </Text>
         <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
           <Text style={styles.logoutText}>Logout</Text>
         </TouchableOpacity>
       </View>
 
-      <FlatList
-        data={combinedList}
-        renderItem={renderPeer}
-        keyExtractor={(item, index) => `${item.phoneNumber}_${index}`}
-        contentContainerStyle={combinedList.length === 0 ? styles.emptyList : styles.list}
-        ListEmptyComponent={renderEmpty}
-        refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={onRefresh}
-            colors={[COLORS.primary]}
-            tintColor={COLORS.primary}
+      <View style={styles.content}>
+        {activeTab === 'contacts' ? (
+          <FlatList
+            data={combinedList}
+            renderItem={renderPeer}
+            keyExtractor={(item, index) => `${item.phoneNumber}_${index}`}
+            contentContainerStyle={
+              combinedList.length === 0
+                ? styles.emptyList
+                : [styles.list, styles.listContentPadding]
+            }
+            ListEmptyComponent={renderEmpty}
+            refreshControl={
+              <RefreshControl
+                refreshing={refreshing}
+                onRefresh={onRefresh}
+                colors={[COLORS.primary]}
+                tintColor={COLORS.primary}
+              />
+            }
           />
-        }
-      />
+        ) : (
+          <FlatList
+            data={callLogs}
+            renderItem={renderCallLog}
+            keyExtractor={(item) => item.id}
+            contentContainerStyle={
+              callLogs.length === 0
+                ? styles.emptyList
+                : [styles.list, styles.listContentPadding]
+            }
+            ListEmptyComponent={renderCallLogsEmpty}
+            refreshControl={
+              <RefreshControl
+                refreshing={callLogsRefreshing}
+                onRefresh={handleCallLogsRefresh}
+                colors={[COLORS.primary]}
+                tintColor={COLORS.primary}
+              />
+            }
+          />
+        )}
+      </View>
+
+      <View style={styles.bottomTabs}>
+        <TouchableOpacity
+          style={[styles.tabButton, activeTab === 'contacts' && styles.tabButtonActive]}
+          onPress={() => handleTabChange('contacts')}
+        >
+          <Text
+            style={[
+              styles.tabButtonText,
+              activeTab === 'contacts' && styles.tabButtonTextActive,
+            ]}
+          >
+            Contacts
+          </Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.tabButton, activeTab === 'callLogs' && styles.tabButtonActive]}
+          onPress={() => handleTabChange('callLogs')}
+        >
+          <Text
+            style={[
+              styles.tabButtonText,
+              activeTab === 'callLogs' && styles.tabButtonTextActive,
+            ]}
+          >
+            Call Logs
+          </Text>
+        </TouchableOpacity>
+      </View>
     </View>
   );
 };
@@ -647,6 +832,12 @@ const styles = StyleSheet.create({
   },
   list: {
     padding: STYLES.spacing.md,
+  },
+  listContentPadding: {
+    paddingBottom: STYLES.spacing.xl * 4,
+  },
+  content: {
+    flex: 1,
   },
   peerItem: {
     backgroundColor: COLORS.surface,
@@ -735,7 +926,10 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
   },
   emptyList: {
-    flex: 1,
+    flexGrow: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: STYLES.spacing.md,
   },
   emptyContainer: {
     flex: 1,
@@ -752,6 +946,75 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: COLORS.textSecondary,
     marginTop: STYLES.spacing.xs,
+  },
+  bottomTabs: {
+    flexDirection: 'row',
+    borderTopWidth: 1,
+    borderTopColor: COLORS.border,
+    backgroundColor: COLORS.surface,
+  },
+  tabButton: {
+    flex: 1,
+    paddingVertical: STYLES.spacing.md,
+    alignItems: 'center',
+  },
+  tabButtonActive: {
+    borderBottomWidth: 3,
+    borderBottomColor: COLORS.primary,
+  },
+  tabButtonText: {
+    fontSize: 14,
+    color: COLORS.textSecondary,
+  },
+  tabButtonTextActive: {
+    color: COLORS.primary,
+    fontWeight: '600',
+  },
+  callLogItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: COLORS.surface,
+    padding: STYLES.spacing.md,
+    borderRadius: STYLES.borderRadius.md,
+    marginBottom: STYLES.spacing.sm,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 1,
+    elevation: 1,
+  },
+  callLogIconWrapper: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(0,0,0,0.05)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: STYLES.spacing.md,
+  },
+  callLogIcon: {
+    fontSize: 20,
+  },
+  callLogInfo: {
+    flex: 1,
+  },
+  callLogName: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: COLORS.text,
+  },
+  callLogMissed: {
+    color: COLORS.danger,
+  },
+  callLogMeta: {
+    fontSize: 12,
+    color: COLORS.textSecondary,
+    marginTop: 2,
+  },
+  callLogTime: {
+    fontSize: 12,
+    color: COLORS.textSecondary,
+    marginLeft: STYLES.spacing.sm,
   },
 });
 

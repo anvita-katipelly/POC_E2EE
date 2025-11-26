@@ -14,6 +14,16 @@ import socketService from '../services/socketService';
 import contactsService from '../services/contactsService';
 import { COLORS, STYLES } from '../config/config';
 
+const formatContactLabel = (name, phone) => {
+  if (!phone) {
+    return name || '';
+  }
+  if (!name || name === phone) {
+    return phone;
+  }
+  return `${name} (${phone})`;
+};
+
 const IncomingCallScreen = ({ route, navigation }) => {
   const { from, offer, isVideo, myPhone } = route.params;
   
@@ -124,7 +134,7 @@ const IncomingCallScreen = ({ route, navigation }) => {
     navigation.goBack();
   };
 
-  const displayName = contactsService.getDisplayName(from) || from;
+  const displayName = formatContactLabel(contactsService.getDisplayName(from), from);
 
   return (
     <SafeAreaView style={styles.container}>

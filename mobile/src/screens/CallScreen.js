@@ -18,6 +18,16 @@ import { COLORS, STYLES } from '../config/config';
 
 const { width, height } = Dimensions.get('window');
 
+const formatContactLabel = (name, phone) => {
+  if (!phone) {
+    return name || '';
+  }
+  if (!name || name === phone) {
+    return phone;
+  }
+  return `${name} (${phone})`;
+};
+
 const formatCallDuration = (seconds = 0) => {
   const safeSeconds = Math.max(0, Math.floor(seconds));
   const minutes = Math.floor(safeSeconds / 60);
@@ -383,7 +393,7 @@ const CallScreen = ({ route, navigation }) => {
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
 
-  const displayName = contactsService.getDisplayName(peerPhone) || peerPhone;
+  const displayName = formatContactLabel(contactsService.getDisplayName(peerPhone), peerPhone);
 
   return (
     <SafeAreaView style={styles.container}>
