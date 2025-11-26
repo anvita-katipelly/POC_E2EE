@@ -25,6 +25,8 @@ import { launchImageLibrary, launchCamera } from 'react-native-image-picker';
 import DocumentPicker from 'react-native-document-picker';
 import { COLORS, STYLES } from '../config/config';
 import RNFS from 'react-native-fs';
+import WebView from 'react-native-webview';
+import Video from 'react-native-video';
 
 const isImageAttachment = (message) => {
   if (!message) {
@@ -96,6 +98,7 @@ const ChatScreen = ({ navigation, route }) => {
   const [uploadProgress, setUploadProgress] = useState(0);
   const [pendingMediaMessageId, setPendingMediaMessageId] = useState(null);
   const [reactionTarget, setReactionTarget] = useState(null);
+  const [previewMedia, setPreviewMedia] = useState(null);
   const flatListRef = useRef(null);
   const autoDownloadQueue = useRef(new Set());
   const conversationId = messageStorage.getConversationId(normalizedMyPhone, normalizedPeerPhone);
@@ -328,6 +331,38 @@ const ChatScreen = ({ navigation, route }) => {
     setReactionTarget(null);
   }, []);
 
+  const ensureLocalUri = useCallback(async (message) => {
+    if (message.localUri) {
+      return message.localUri;
+    }
+    if (message.status === 'downloaded') {
+      return message.localUri;
+    }
+    Alert.alert('Preview unavailable', 'Download the file before previewing.');
+    return null;
+  }, []);
+
+  const handleOpenPreview = useCallback(
+    async (message) => {
+      if (!message || message.type !== 'file') {
+        return;
+      }
+      const localUri = await ensureLocalUri(message);
+      if (!localUri) {
+        return;
+      }
+      setPreviewMedia({
+        ...message,
+        previewUri: localUri,
+      });
+    },
+    [ensureLocalUri]
+  );
+
+  const closeMediaPreview = useCallback(() => {
+    setPreviewMedia(null);
+  }, []);
+
   const handleAttachPress = () => {
     if (isUploading) {
       Alert.alert('Upload in progress', 'Please wait for the current upload to finish.');
@@ -461,66 +496,6 @@ const ChatScreen = ({ navigation, route }) => {
       }
       console.error('[ChatScreen] Document picker error:', err);
       Alert.alert('File Error', err.message || 'Failed to select file');
-    }
-  };
-
-  const handleSaveMediaToDevice = async (message) => {
-    if (!message?.localUri) {
-      Alert.alert('Save failed', 'Download the file before saving to your device.');
-      return;
-    }
-
-    try {
-      const sourcePath = stripFileScheme(message.localUri);
-      
-      if (Platform.OS === 'ios') {
-        // On iOS, save to Photos library for images/videos, or use share sheet for other files
-        const isImage = isImageAttachment(message);
-        const isVideo = message.mimeType?.startsWith('video/');
-        
-        if (isImage || isVideo) {
-          // For iOS, we'll use Linking to open the file, which allows saving to Photos
-          // Or we can copy to a temp location and use share functionality
-          const { Linking } = require('react-native');
-          const connectionStatus = socketService.getConnectionStatus();
-          const serverUrl = connectionStatus.serverUrl || 'http://10.0.2.2:3000';
-          const downloadUrl = `${serverUrl}/receive/${message.fileId}`;
-          
-          // Open the download URL which will trigger iOS share sheet
-          const canOpen = await Linking.canOpenURL(downloadUrl);
-          if (canOpen) {
-            await Linking.openURL(downloadUrl);
-            Alert.alert('Open in Browser', 'The file will open in Safari. Use the share button to save to Photos or Files.');
-          } else {
-            // Fallback: copy to Documents and show path
-            const destinationDir = getDownloadDirectory();
-            await ensureDirectoryExists(destinationDir);
-            const safeName = sanitizeFileName(message.fileName || `${message.id}.bin`);
-            const destinationPath = `${destinationDir}/${safeName}`;
-            await RNFS.copyFile(sourcePath, destinationPath);
-            Alert.alert('Saved', `File saved to app storage.\n\nTo access: Open Files app > On My iPhone > IMPLI > E2EE`);
-          }
-        } else {
-          // For other files, save to Documents directory
-          const destinationDir = getDownloadDirectory();
-          await ensureDirectoryExists(destinationDir);
-          const safeName = sanitizeFileName(message.fileName || `${message.id}.bin`);
-          const destinationPath = `${destinationDir}/${safeName}`;
-          await RNFS.copyFile(sourcePath, destinationPath);
-          Alert.alert('Saved', `File saved to app storage.\n\nTo access: Open Files app > On My iPhone > IMPLI > E2EE`);
-        }
-      } else {
-        // Android: save to Downloads folder
-        const destinationDir = getDownloadDirectory();
-        await ensureDirectoryExists(destinationDir);
-        const safeName = sanitizeFileName(message.fileName || `${message.id}.bin`);
-        const destinationPath = `${destinationDir}/${safeName}`;
-        await RNFS.copyFile(sourcePath, destinationPath);
-        Alert.alert('Saved', `File saved to:\n${destinationPath}`);
-      }
-    } catch (error) {
-      console.error('[ChatScreen] Failed to save media:', error);
-      Alert.alert('Save failed', error.message || 'Unable to save file to device.');
     }
   };
 
@@ -909,6 +884,79 @@ const ChatScreen = ({ navigation, route }) => {
     }
   };
 
+  const renderPreviewContent = () => {
+    if (!previewMedia) {
+      return null;
+    }
+    const uri = previewMedia.previewUri || previewMedia.localUri;
+    if (!uri) {
+      return (
+        <Text style={styles.previewFallbackText}>
+          Unable to preview this file.
+        </Text>
+      );
+    }
+
+    const normalizedUri = uri.startsWith('file://') ? uri : `file://${uri}`;
+    const safeUri = encodeURI(normalizedUri);
+    const baseWebViewProps = {
+      originWhitelist: ['*'],
+      allowsInlineMediaPlayback: true,
+      mediaPlaybackRequiresUserAction: false,
+      allowFileAccess: true,
+      allowFileAccessFromFileURLs: true,
+      allowUniversalAccessFromFileURLs: true,
+      javaScriptEnabled: true,
+    };
+
+    if (previewMedia.mimeType?.startsWith('image/')) {
+      return <Image source={{ uri: safeUri }} style={styles.previewImage} resizeMode="contain" />;
+    }
+
+    if (previewMedia.mimeType?.startsWith('video/')) {
+      return (
+        <Video
+          source={{ uri: normalizedUri }}
+          style={styles.previewVideo}
+          controls
+          resizeMode="contain"
+          paused={false}
+          repeat={false}
+        />
+      );
+    }
+
+    if (previewMedia.mimeType?.startsWith('audio/')) {
+      return (
+        <Video
+          source={{ uri: normalizedUri }}
+          style={styles.previewAudio}
+          controls
+          audioOnly
+          paused={false}
+          repeat={false}
+        />
+      );
+    }
+
+    if (previewMedia.mimeType === 'application/pdf') {
+      return (
+        <WebView
+          {...baseWebViewProps}
+          source={{ uri: safeUri }}
+          style={styles.previewWeb}
+        />
+      );
+    }
+
+    return (
+      <View style={styles.previewFallback}>
+        <Text style={styles.previewFallbackEmoji}>📄</Text>
+        <Text style={styles.previewFallbackText}>Preview not available for this file type.</Text>
+      </View>
+    );
+  };
+
   const renderMessage = ({ item }) => {
     const isMyMessage = item.from === normalizedMyPhone;
     const isFileMessage = item.type === 'file';
@@ -931,32 +979,42 @@ const ChatScreen = ({ navigation, route }) => {
           >
             {isFileMessage ? (
             <View style={styles.attachmentContainer}>
-              {showImagePreview && (
-                hasLocalPreview ? (
-                  <Image
-                    source={{ uri: item.localUri }}
-                    style={styles.attachmentPreview}
-                    resizeMode="cover"
-                  />
-                ) : (
-                  <View style={styles.attachmentPreviewPlaceholder}>
-                    {item.status === 'downloading' ? (
-                      <ActivityIndicator color={COLORS.primary} />
-                    ) : (
-                      <Text style={styles.previewPlaceholderText}>Preview available after download</Text>
-                    )}
-                  </View>
-                )
-              )}
-              <Text
-                style={[
-                  styles.attachmentName,
-                  isMyMessage ? styles.myMessageText : styles.peerMessageText,
-                ]}
-                numberOfLines={2}
+              <TouchableOpacity
+                activeOpacity={0.85}
+                onPress={() => handleOpenPreview(item)}
               >
-                {item.fileName || 'Attachment'}
-              </Text>
+                {showImagePreview ? (
+                  hasLocalPreview ? (
+                    <Image
+                      source={{ uri: item.localUri }}
+                      style={styles.attachmentPreview}
+                      resizeMode="cover"
+                    />
+                  ) : (
+                    <View style={styles.attachmentPreviewPlaceholder}>
+                      {item.status === 'downloading' ? (
+                        <ActivityIndicator color={COLORS.primary} />
+                      ) : (
+                        <Text style={styles.previewPlaceholderText}>
+                          Download to preview
+                        </Text>
+                      )}
+                    </View>
+                  )
+                ) : (
+                  <View style={styles.genericAttachmentPreview}>
+                    <Text style={styles.genericAttachmentEmoji}>
+                      {item.mimeType?.startsWith('video/')
+                        ? '🎬'
+                        : item.mimeType?.startsWith('audio/')
+                        ? '🎵'
+                        : item.mimeType === 'application/pdf'
+                        ? '📄'
+                        : '📁'}
+                    </Text>
+                  </View>
+                )}
+              </TouchableOpacity>
               <Text style={styles.attachmentMeta}>
                 {mediaUploadService.formatBytes(item.fileSize)} · {item.status || 'pending'}
               </Text>
@@ -984,19 +1042,8 @@ const ChatScreen = ({ navigation, route }) => {
                   </Text>
                 </TouchableOpacity>
               )}
-              {item.localUri && (
-                <View style={styles.localFileActions}>
-                  <Text style={styles.downloadedTag}>Cached for quick preview</Text>
-                  <TouchableOpacity
-                    style={styles.saveButton}
-                    onPress={() => handleSaveMediaToDevice(item)}
-                  >
-                    <Text style={styles.saveButtonText}>Save to device</Text>
-                  </TouchableOpacity>
-                </View>
-              )}
             </View>
-            ) : (
+          ) : (
             <Text
               style={[
                 styles.messageText,
@@ -1124,6 +1171,21 @@ const ChatScreen = ({ navigation, route }) => {
           </View>
         </TouchableWithoutFeedback>
       </Modal>
+
+      <Modal
+        visible={!!previewMedia}
+        transparent
+        animationType="fade"
+        onRequestClose={closeMediaPreview}
+      >
+        <TouchableWithoutFeedback onPress={closeMediaPreview}>
+          <View style={styles.previewOverlay}>
+            <TouchableWithoutFeedback>
+              <View style={styles.previewContainer}>{renderPreviewContent()}</View>
+            </TouchableWithoutFeedback>
+          </View>
+        </TouchableWithoutFeedback>
+      </Modal>
     </>
   );
 };
@@ -1239,6 +1301,53 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: COLORS.text,
   },
+  previewOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.8)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: STYLES.spacing.md,
+  },
+  previewContainer: {
+    width: '100%',
+    height: '80%',
+    borderRadius: STYLES.borderRadius.lg,
+    overflow: 'hidden',
+    backgroundColor: '#000',
+  },
+  previewImage: {
+    width: '100%',
+    height: '100%',
+  },
+  previewWeb: {
+    flex: 1,
+    width: '100%',
+  },
+  previewVideo: {
+    width: '100%',
+    height: '100%',
+    backgroundColor: '#000',
+  },
+  previewAudio: {
+    width: '100%',
+    height: 100,
+    backgroundColor: '#000',
+  },
+  previewFallback: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: STYLES.spacing.lg,
+  },
+  previewFallbackEmoji: {
+    fontSize: 48,
+    marginBottom: STYLES.spacing.md,
+  },
+  previewFallbackText: {
+    color: '#fff',
+    textAlign: 'center',
+    fontSize: 16,
+  },
   inputContainer: {
     flexDirection: 'row',
     padding: STYLES.spacing.md,
@@ -1278,10 +1387,6 @@ const styles = StyleSheet.create({
   attachmentContainer: {
     width: '100%',
   },
-  attachmentName: {
-    fontSize: 16,
-    fontWeight: '600',
-  },
   attachmentMeta: {
     fontSize: 12,
     color: COLORS.textSecondary,
@@ -1313,26 +1418,6 @@ const styles = StyleSheet.create({
   downloadButtonDisabled: {
     opacity: 0.6,
   },
-  downloadedTag: {
-    marginTop: STYLES.spacing.xs,
-    fontSize: 12,
-    color: COLORS.textSecondary,
-  },
-  localFileActions: {
-    marginTop: STYLES.spacing.xs,
-  },
-  saveButton: {
-    marginTop: STYLES.spacing.xs,
-    alignSelf: 'flex-start',
-    paddingHorizontal: STYLES.spacing.md,
-    paddingVertical: 6,
-    borderRadius: STYLES.borderRadius.sm,
-    backgroundColor: COLORS.secondary,
-  },
-  saveButtonText: {
-    color: COLORS.surface,
-    fontWeight: '600',
-  },
   attachmentPreview: {
     width: 180,
     height: 180,
@@ -1353,6 +1438,18 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: COLORS.textSecondary,
     textAlign: 'center',
+  },
+  genericAttachmentPreview: {
+    width: 180,
+    height: 180,
+    borderRadius: STYLES.borderRadius.md,
+    marginBottom: STYLES.spacing.sm,
+    backgroundColor: '#E5E5EA',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  genericAttachmentEmoji: {
+    fontSize: 48,
   },
   attachButton: {
     width: 36,

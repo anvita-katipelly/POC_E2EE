@@ -260,8 +260,10 @@ const PeersListScreen = ({ navigation, route }) => {
         }
       });
 
+      const filtered = combined.filter(item => item.isContact || item.isOnline || item.hasConversation);
+
       // Sort: Conversations with unread first, then online, then by name/phone
-      combined.sort((a, b) => {
+      filtered.sort((a, b) => {
         const normalizedMyPhone = phoneNumber.replace(/[\s\-()]/g, '');
         const normalizedPhoneA = a.phoneNumber.replace(/[\s\-()]/g, '');
         const normalizedPhoneB = b.phoneNumber.replace(/[\s\-()]/g, '');
@@ -295,8 +297,8 @@ const PeersListScreen = ({ navigation, route }) => {
         return aDisplay.localeCompare(bDisplay);
       });
 
-      console.log(`[PeersListScreen] Combined list: ${combined.length} items (${peers.length} online, ${allContacts.length} contacts, ${Object.keys(conversations).length} conversations)`);
-      setCombinedList(combined);
+      console.log(`[PeersListScreen] Combined list: ${filtered.length} items (${peers.length} online, ${allContacts.length} contacts, ${Object.keys(conversations).length} conversations)`);
+      setCombinedList(filtered);
     };
 
     if (allContacts.length > 0 || peers.length > 0 || Object.keys(conversations).length > 0) {

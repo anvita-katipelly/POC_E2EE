@@ -68,11 +68,16 @@ dependencies {
     // Disable Flipper to avoid libcrypto.so conflict with react-native-quick-crypto
     // implementation("com.facebook.react:flipper-integration")
 
+    // Explicitly add androidx.core with version compatible with SDK 34
+    // Version 1.13.0 includes OnUserLeaveHintProvider and works with SDK 34
+    implementation 'androidx.core:core:1.13.0'
+    implementation 'androidx.core:core-ktx:1.13.0'
+
     // Force compatible androidx.core version
     configurations.all {
         resolutionStrategy {
-            force 'androidx.core:core:1.12.0'
-            force 'androidx.core:core-ktx:1.12.0'
+            force 'androidx.core:core:1.13.0'
+            force 'androidx.core:core-ktx:1.13.0'
         }
     }
 
