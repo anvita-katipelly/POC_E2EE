@@ -93,24 +93,36 @@ const ChatScreen = ({ navigation, route }) => {
     conversationId 
   });
 
-  useEffect(() => {
-    // Load messages from storage and clear unread count
-    const loadMessages = async () => {
-      try {
-        const storedMessages = await messageStorage.getMessages(conversationId);
-        setMessages(storedMessages);
-        
-        // Clear unread count when opening the chat
-        await messageStorage.clearUnreadCount(conversationId);
-      } catch (error) {
-        console.error('[ChatScreen] Error loading messages:', error);
-      } finally {
+  const loadMessages = useCallback(async (showLoader = false) => {
+    if (showLoader) {
+      setIsLoading(true);
+    }
+    try {
+      const storedMessages = await messageStorage.getMessages(conversationId);
+      setMessages(storedMessages);
+      
+      // Clear unread count when opening or revisiting the chat
+      await messageStorage.clearUnreadCount(conversationId);
+    } catch (error) {
+      console.error('[ChatScreen] Error loading messages:', error);
+    } finally {
+      if (showLoader) {
         setIsLoading(false);
       }
-    };
-
-    loadMessages();
+    }
   }, [conversationId]);
+
+  useEffect(() => {
+    loadMessages(true);
+  }, [loadMessages]);
+
+  useEffect(() => {
+    const unsubscribe = navigation.addListener('focus', () => {
+      loadMessages();
+    });
+
+    return unsubscribe;
+  }, [navigation, loadMessages]);
 
   useEffect(() => {
     // Set navigation header with contact name and call buttons
@@ -752,6 +764,7 @@ const ChatScreen = ({ navigation, route }) => {
         peerPhone: normalizedPeerPhone,
         isVideo: false,
         isOutgoing: true,
+        myPhone: normalizedMyPhone,
       });
     } catch (error) {
       console.error('[ChatScreen] Error initiating voice call:', error);
@@ -803,6 +816,7 @@ const ChatScreen = ({ navigation, route }) => {
         peerPhone: normalizedPeerPhone,
         isVideo: true,
         isOutgoing: true,
+        myPhone: normalizedMyPhone,
       });
     } catch (error) {
       console.error('[ChatScreen] Error initiating video call:', error);

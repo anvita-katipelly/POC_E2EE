@@ -15,7 +15,7 @@ import contactsService from '../services/contactsService';
 import { COLORS, STYLES } from '../config/config';
 
 const IncomingCallScreen = ({ route, navigation }) => {
-  const { from, offer, isVideo } = route.params;
+  const { from, offer, isVideo, myPhone } = route.params;
   
   // Normalize phone number
   const normalizedFrom = from?.replace(/[\s\-()]/g, '') || from;
@@ -104,6 +104,7 @@ const IncomingCallScreen = ({ route, navigation }) => {
         peerPhone: from,
         isVideo,
         isOutgoing: false,
+        myPhone,
       });
     } catch (error) {
       console.error('[IncomingCallScreen] Error accepting call:', error);

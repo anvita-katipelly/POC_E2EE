@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View,
   Text,
@@ -13,12 +13,82 @@ import { RTCView } from 'react-native-webrtc';
 import webrtcService from '../services/webrtcService';
 import socketService from '../services/socketService';
 import contactsService from '../services/contactsService';
+import messageStorage from '../services/messageStorage';
 import { COLORS, STYLES } from '../config/config';
 
 const { width, height } = Dimensions.get('window');
 
+const formatCallDuration = (seconds = 0) => {
+  const safeSeconds = Math.max(0, Math.floor(seconds));
+  const minutes = Math.floor(safeSeconds / 60);
+  const remaining = safeSeconds % 60;
+  return `${minutes}:${remaining.toString().padStart(2, '0')}`;
+};
+
+// Helper function to log call to chat
+const logCallToChat = async (myPhone, peerPhone, isVideo, durationSeconds, isOutgoing) => {
+  try {
+    const normalizedMyPhone = myPhone?.replace(/[\s\-()]/g, '') || myPhone;
+    const normalizedPeerPhone = peerPhone?.replace(/[\s\-()]/g, '') || peerPhone;
+
+    if (!normalizedMyPhone || !normalizedPeerPhone) {
+      console.warn('[CallScreen] Cannot log call - missing phone numbers', {
+        myPhone: normalizedMyPhone,
+        peerPhone: normalizedPeerPhone,
+      });
+      return;
+    }
+
+    const conversationId = messageStorage.getConversationId(
+      normalizedMyPhone,
+      normalizedPeerPhone,
+    );
+
+    const duration = Math.max(0, Math.floor(durationSeconds || 0));
+    const durationText = formatCallDuration(duration);
+    const callTypeLabel = isVideo ? 'video' : 'voice';
+    const directionLabel = isOutgoing ? 'Outgoing' : 'Incoming';
+    const completed = duration > 0;
+    const statusLabel = completed
+      ? `${directionLabel} ${callTypeLabel} call`
+      : isOutgoing
+        ? `Unanswered ${callTypeLabel} call`
+        : `Missed ${callTypeLabel} call`;
+    const icon = completed ? '📞' : '❌';
+    const text = completed
+      ? `${icon} ${statusLabel} • ${durationText}`
+      : `${icon} ${statusLabel}`;
+
+    const isMissedIncoming = !isOutgoing && !completed;
+    const callMessage = {
+      id: `call_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      type: 'call',
+      text,
+      callType: callTypeLabel,
+      callDirection: isOutgoing ? 'outgoing' : 'incoming',
+      callStatus: completed ? 'completed' : (isOutgoing ? 'unanswered' : 'missed'),
+      duration,
+      durationText,
+      isOutgoing,
+      from: isMissedIncoming ? normalizedPeerPhone : normalizedMyPhone,
+      to: isMissedIncoming ? normalizedMyPhone : normalizedPeerPhone,
+      timestamp: new Date().toISOString(),
+      isSent: true,
+    };
+
+    console.log('[CallScreen] Logging call to chat:', {
+      conversationId,
+      summary: callMessage.text,
+    });
+
+    await messageStorage.addMessage(conversationId, callMessage, normalizedMyPhone);
+  } catch (error) {
+    console.error('[CallScreen] Error logging call to chat:', error);
+  }
+};
+
 const CallScreen = ({ route, navigation }) => {
-  const { peerPhone, isVideo, isOutgoing } = route.params;
+  const { peerPhone, isVideo, isOutgoing, myPhone } = route.params || {};
   
   // Normalize phone number
   const normalizedPeerPhone = peerPhone?.replace(/[\s\-()]/g, '') || peerPhone;
@@ -28,9 +98,34 @@ const CallScreen = ({ route, navigation }) => {
   const [remoteStream, setRemoteStream] = useState(null);
   const [callDuration, setCallDuration] = useState(0);
   const callTimerRef = useRef(null);
+  const callDurationRef = useRef(0);
+  const isNavigatingRef = useRef(false);
+  const hasLoggedCallRef = useRef(false);
+
+  const startCallTimer = useCallback(() => {
+    if (callTimerRef.current) {
+      return;
+    }
+    console.log('[CallScreen] Starting call duration timer');
+    callTimerRef.current = setInterval(() => {
+      setCallDuration((prev) => prev + 1);
+    }, 1000);
+  }, []);
+
+  const stopCallTimer = useCallback(() => {
+    if (callTimerRef.current) {
+      clearInterval(callTimerRef.current);
+      callTimerRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => {
+    callDurationRef.current = callDuration;
+  }, [callDuration]);
 
   useEffect(() => {
     console.log('[CallScreen] Mounted', { peerPhone, isVideo, isOutgoing });
+    hasLoggedCallRef.current = false;
 
     // Set up WebRTC callbacks
     webrtcService.onStateChange = (state) => {
@@ -67,15 +162,40 @@ const CallScreen = ({ route, navigation }) => {
         });
       }
       
+      // Start call duration timer when connected
+      if (state.callState === 'connected') {
+        startCallTimer();
+      }
+      
       // Navigate back if call ended
       if (state.callState === 'ended' || state.callState === 'idle') {
-        if (callTimerRef.current) {
-          clearInterval(callTimerRef.current);
-          callTimerRef.current = null;
+        stopCallTimer();
+        
+        if (!hasLoggedCallRef.current) {
+          hasLoggedCallRef.current = true;
+          logCallToChat(myPhone, peerPhone, isVideo, callDurationRef.current, isOutgoing).catch(err => {
+            console.error('[CallScreen] Error logging call:', err);
+          });
         }
-        setTimeout(() => {
-          navigation.goBack();
-        }, 500);
+        
+        // Only navigate once
+        if (!isNavigatingRef.current) {
+          isNavigatingRef.current = true;
+          setTimeout(() => {
+            try {
+              const canGoBack = navigation?.canGoBack?.();
+              if (isOutgoing && canGoBack) {
+                navigation.goBack();
+              } else if (navigation?.navigate) {
+                navigation.navigate('PeersList', { phoneNumber: myPhone });
+              } else if (canGoBack) {
+                navigation.goBack();
+              }
+            } catch (error) {
+              console.error('[CallScreen] Navigation error:', error);
+            }
+          }, 500);
+        }
       }
     };
 
@@ -83,11 +203,10 @@ const CallScreen = ({ route, navigation }) => {
       console.log('[CallScreen] Remote stream received');
       setRemoteStream(stream);
       
-      // Start call duration timer when connected
-      if (!callTimerRef.current) {
-        callTimerRef.current = setInterval(() => {
-          setCallDuration(prev => prev + 1);
-        }, 1000);
+      // Start timer as backup if not already started (for receiver who might get stream before state change)
+      const currentState = webrtcService.getState();
+      if (currentState.callState === 'connected') {
+        startCallTimer();
       }
     };
 
@@ -121,6 +240,9 @@ const CallScreen = ({ route, navigation }) => {
         console.log('[CallScreen] Setting initial remote stream:', currentState.remoteStream.id);
         setRemoteStream(currentState.remoteStream);
       }
+      if (currentState.callState === 'connected') {
+        startCallTimer();
+      }
       setCallState(currentState);
     };
     
@@ -146,6 +268,9 @@ const CallScreen = ({ route, navigation }) => {
           }
           return prevStream;
         });
+      }
+      if (currentState.callState === 'connected') {
+        startCallTimer();
       }
       // Also update call state
       setCallState(currentState);
@@ -213,21 +338,23 @@ const CallScreen = ({ route, navigation }) => {
       webrtcService.onRemoteStream = null;
       webrtcService.onIceCandidate = null;
       
-      if (callTimerRef.current) {
-        clearInterval(callTimerRef.current);
-        callTimerRef.current = null;
-      }
+      stopCallTimer();
       
       if (localStreamCheckInterval) {
         clearInterval(localStreamCheckInterval);
       }
+      
+      // Reset navigation flag
+      isNavigatingRef.current = false;
+      hasLoggedCallRef.current = false;
     };
-  }, [normalizedPeerPhone, isVideo, isOutgoing, navigation]);
+  }, [normalizedPeerPhone, isVideo, isOutgoing, navigation, startCallTimer, stopCallTimer, myPhone, peerPhone]);
 
   const handleEndCall = () => {
     console.log('[CallScreen] End call button pressed');
     socketService.endCall(peerPhone);
     webrtcService.endCall();
+    stopCallTimer();
   };
 
   const handleToggleMute = () => {

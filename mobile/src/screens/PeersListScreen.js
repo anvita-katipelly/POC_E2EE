@@ -18,6 +18,7 @@ import { COLORS, STYLES } from '../config/config';
 
 const PeersListScreen = ({ navigation, route }) => {
   const { phoneNumber } = route.params || {};
+  const normalizedMyPhone = phoneNumber?.replace(/[\s\-()]/g, '') || phoneNumber;
   const [peers, setPeers] = useState([]);
   const [conversations, setConversations] = useState({});
   const [isLoading, setIsLoading] = useState(false);
@@ -57,6 +58,7 @@ const PeersListScreen = ({ navigation, route }) => {
         from: data.from,
         offer: data.offer,
         isVideo: data.isVideo,
+        myPhone: normalizedMyPhone,
       });
     };
 
