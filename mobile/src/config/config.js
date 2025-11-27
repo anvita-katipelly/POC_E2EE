@@ -11,7 +11,7 @@
 // For physical devices, use your machine's local IP: 'http://192.168.1.XXX:3000'
 
 export const SERVER_URL = __DEV__
-  ? 'http://10.0.2.2:3000' // TODO: Change this to your local IP address
+  ? 'http://192.168.61.42:3000' // TODO: Change this to your local IP address
   : 'http://10.0.2.2:3000';
 
 export const COLORS = {

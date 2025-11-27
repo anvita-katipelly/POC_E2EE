@@ -14,6 +14,7 @@ import {
   PermissionsAndroid,
   Image,
   Modal,
+  Keyboard,
 } from 'react-native';
 import socketService from '../services/socketService';
 import messageStorage from '../services/messageStorage';
@@ -66,6 +67,210 @@ const formatContactLabel = (name, phone) => {
 const REACTION_OPTIONS = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
 
 const stripFileScheme = (uri = '') => uri.replace(/^file:\/\//, '');
+
+// Forward Contact Selection Component
+const ForwardContactScreen = ({ message, myPhone, onClose, navigation }) => {
+  const [contacts, setContacts] = useState([]);
+  const [peers, setPeers] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const loadContacts = async () => {
+      setLoading(true);
+      try {
+        const rawContacts = await contactsService.loadContacts();
+        const allContacts = Array.isArray(rawContacts) ? rawContacts : [];
+        const normalizedMyPhone = myPhone?.replace(/[\s\-()]/g, '') || '';
+        
+        // Filter out current chat peer
+        const filteredContacts = allContacts.filter(contact => {
+          const normalizedContact = contact.phoneNumbers?.[0]?.number?.replace(/[\s\-()]/g, '') || '';
+          return normalizedContact && normalizedContact !== normalizedMyPhone;
+        });
+
+        setContacts(filteredContacts);
+        
+        // Get online peers
+        socketService.getOnlinePeers();
+        socketService.on('online-peers', (data) => {
+          const onlinePeers = (data.peers || []).filter(peer => {
+            const normalizedPeer = peer.phoneNumber?.replace(/[\s\-()]/g, '') || '';
+            return normalizedPeer && normalizedPeer !== normalizedMyPhone;
+          });
+          setPeers(onlinePeers);
+        });
+      } catch (error) {
+        console.error('[ForwardContactScreen] Error loading contacts:', error);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    loadContacts();
+  }, [myPhone]);
+
+  const formatDisplayLabel = useCallback((phone) => {
+    if (!phone) return '';
+    const name = contactsService.getDisplayName(phone);
+    if (!name || name === phone) {
+      return phone;
+    }
+    return `${name} (${phone})`;
+  }, []);
+
+  const handleForward = async (toPhone) => {
+    try {
+      const normalizedToPhone = toPhone?.replace(/[\s\-()]/g, '') || '';
+      const normalizedMyPhone = myPhone?.replace(/[\s\-()]/g, '') || '';
+
+      if (message.type === 'text') {
+        // Forward text message
+        const encrypted = await encryptionService.encryptMessage(
+          message.text,
+          normalizedMyPhone,
+          normalizedToPhone
+        );
+
+        socketService.sendMessage(normalizedToPhone, encrypted);
+
+        const conversationId = messageStorage.getConversationId(normalizedMyPhone, normalizedToPhone);
+        const forwardedMessage = {
+          id: generateUniqueId(),
+          type: 'text',
+          text: message.text,
+          from: normalizedMyPhone,
+          to: normalizedToPhone,
+          timestamp: new Date().toISOString(),
+          isSent: true,
+          isForwarded: true,
+          originalFrom: message.from,
+        };
+
+        await messageStorage.addMessage(conversationId, forwardedMessage, normalizedMyPhone);
+      } else if (message.type === 'file') {
+        // Forward file - reuse the same fileId
+        const conversationId = messageStorage.getConversationId(normalizedMyPhone, normalizedToPhone);
+        
+        const forwardedMessage = {
+          id: generateUniqueId(),
+          type: 'file',
+          text: message.caption || message.text || `[File] ${message.fileName}`,
+          caption: message.caption,
+          fileName: message.fileName,
+          mimeType: message.mimeType,
+          fileSize: message.fileSize,
+          fileId: message.fileId,
+          from: normalizedMyPhone,
+          to: normalizedToPhone,
+          timestamp: new Date().toISOString(),
+          isSent: true,
+          isForwarded: true,
+          originalFrom: message.from,
+          status: 'sent',
+        };
+
+        // Send file notification
+        await socketService.sendFile({
+          to: normalizedToPhone,
+          fileId: message.fileId,
+          originalName: message.fileName,
+          totalChunks: 1, // Will be determined by server
+          mimeType: message.mimeType,
+          size: message.fileSize,
+        });
+
+        await messageStorage.addMessage(conversationId, forwardedMessage, normalizedMyPhone);
+      }
+
+      Alert.alert('Success', 'Message forwarded');
+      onClose();
+    } catch (error) {
+      console.error('[ForwardContactScreen] Error forwarding message:', error);
+      Alert.alert('Error', 'Failed to forward message: ' + error.message);
+    }
+  };
+
+  // Combine contacts and peers
+  const combinedList = React.useMemo(() => {
+    const processed = new Set();
+    const list = [];
+
+    // Add contacts
+    contacts.forEach(contact => {
+      const phone = contact.phoneNumbers?.[0]?.number;
+      if (phone) {
+        const normalized = phone.replace(/[\s\-()]/g, '');
+        if (!processed.has(normalized)) {
+          list.push({
+            phoneNumber: phone,
+            displayLabel: formatDisplayLabel(phone),
+            isContact: true,
+          });
+          processed.add(normalized);
+        }
+      }
+    });
+
+    // Add online peers
+    peers.forEach(peer => {
+      const phone = peer.phoneNumber;
+      if (phone) {
+        const normalized = phone.replace(/[\s\-()]/g, '');
+        if (!processed.has(normalized)) {
+          list.push({
+            phoneNumber: phone,
+            displayLabel: formatDisplayLabel(phone),
+            isContact: false,
+            isOnline: true,
+          });
+          processed.add(normalized);
+        }
+      }
+    });
+
+    return list.sort((a, b) => a.displayLabel.localeCompare(b.displayLabel));
+  }, [contacts, peers]);
+
+  const renderContact = ({ item }) => (
+    <TouchableOpacity
+      style={styles.forwardContactItem}
+      onPress={() => handleForward(item.phoneNumber)}
+    >
+      <View style={styles.forwardContactAvatar}>
+        <Text style={styles.forwardContactAvatarText}>
+          {item.displayLabel.charAt(0).toUpperCase()}
+        </Text>
+      </View>
+      <Text style={styles.forwardContactName}>{item.displayLabel}</Text>
+      {item.isOnline && <Text style={styles.forwardContactOnline}>●</Text>}
+    </TouchableOpacity>
+  );
+
+  return (
+    <View style={styles.forwardModalOverlay}>
+      <View style={styles.forwardModalContainer}>
+        <View style={styles.forwardModalHeader}>
+          <Text style={styles.forwardModalTitle}>Forward to</Text>
+          <TouchableOpacity onPress={onClose}>
+            <Text style={styles.forwardModalClose}>✕</Text>
+          </TouchableOpacity>
+        </View>
+        {loading ? (
+          <View style={styles.forwardLoadingContainer}>
+            <ActivityIndicator size="large" color={COLORS.primary} />
+          </View>
+        ) : (
+          <FlatList
+            data={combinedList}
+            renderItem={renderContact}
+            keyExtractor={(item) => item.phoneNumber}
+            style={styles.forwardContactList}
+          />
+        )}
+      </View>
+    </View>
+  );
+};
 const ensureDirectoryExists = async (dirPath) => {
   try {
     const exists = await RNFS.exists(dirPath);
@@ -99,6 +304,9 @@ const ChatScreen = ({ navigation, route }) => {
   const [pendingMediaMessageId, setPendingMediaMessageId] = useState(null);
   const [reactionTarget, setReactionTarget] = useState(null);
   const [previewMedia, setPreviewMedia] = useState(null);
+  const [pendingMedia, setPendingMedia] = useState(null);
+  const [mediaCaption, setMediaCaption] = useState('');
+  const [forwardTarget, setForwardTarget] = useState(null);
   const flatListRef = useRef(null);
   const autoDownloadQueue = useRef(new Set());
   const conversationId = messageStorage.getConversationId(normalizedMyPhone, normalizedPeerPhone);
@@ -294,10 +502,26 @@ const ChatScreen = ({ navigation, route }) => {
   );
 
   const handleMessageLongPress = useCallback((message) => {
-    if (message.type !== 'text') {
-      return;
+    if (message.type === 'text') {
+      setReactionTarget(message);
+    } else {
+      // Show forward/reaction options for media
+      Alert.alert(
+        'Message Options',
+        'Choose an action',
+        [
+          {
+            text: 'Forward',
+            onPress: () => setForwardTarget(message),
+          },
+          {
+            text: 'Cancel',
+            style: 'cancel',
+          },
+        ],
+        { cancelable: true }
+      );
     }
-    setReactionTarget(message);
   }, []);
 
   const handleReactionSelect = useCallback(
@@ -331,32 +555,35 @@ const ChatScreen = ({ navigation, route }) => {
     setReactionTarget(null);
   }, []);
 
-  const ensureLocalUri = useCallback(async (message) => {
-    if (message.localUri) {
-      return message.localUri;
-    }
-    if (message.status === 'downloaded') {
-      return message.localUri;
-    }
-    Alert.alert('Preview unavailable', 'Download the file before previewing.');
-    return null;
-  }, []);
-
   const handleOpenPreview = useCallback(
-    async (message) => {
+    (message) => {
       if (!message || message.type !== 'file') {
         return;
       }
-      const localUri = await ensureLocalUri(message);
-      if (!localUri) {
+
+      // Prefer already-downloaded local file
+      let previewUri = message.localUri;
+
+      // If we don't have a local file yet, stream directly from server
+      if (!previewUri && message.fileId) {
+        const connectionStatus = socketService.getConnectionStatus();
+        const serverUrl =
+          connectionStatus.serverUrl ||
+          (Platform.OS === 'android' ? 'http://10.0.2.2:3000' : 'http://localhost:3000');
+        previewUri = `${serverUrl}/receive/${message.fileId}`;
+      }
+
+      if (!previewUri) {
+        Alert.alert('Preview unavailable', 'No preview source available for this file yet.');
         return;
       }
+
       setPreviewMedia({
         ...message,
-        previewUri: localUri,
+        previewUri,
       });
     },
-    [ensureLocalUri]
+    []
   );
 
   const closeMediaPreview = useCallback(() => {
@@ -393,6 +620,19 @@ const ChatScreen = ({ navigation, route }) => {
       { cancelable: true }
     );
   };
+
+  const handleConfirmMediaWithCaption = useCallback(async () => {
+    if (!pendingMedia) return;
+    const asset = pendingMedia;
+    setPendingMedia(null);
+    await handleSendMedia(asset, mediaCaption.trim());
+    setMediaCaption('');
+  }, [pendingMedia, mediaCaption]);
+
+  const handleCancelMediaCaption = useCallback(() => {
+    setPendingMedia(null);
+    setMediaCaption('');
+  }, []);
 
   const handleOpenCamera = async () => {
     // Check camera permissions on Android
@@ -460,7 +700,8 @@ const ChatScreen = ({ navigation, route }) => {
 
         const asset = response.assets?.[0];
         if (asset?.uri) {
-          await handleSendMedia(asset);
+          setPendingMedia(asset);
+          setMediaCaption('');
         } else {
           Alert.alert('Media Error', 'No media asset selected');
         }
@@ -489,7 +730,8 @@ const ChatScreen = ({ navigation, route }) => {
         fileSize: document.size || 0,
       };
 
-      await handleSendMedia(asset);
+      setPendingMedia(asset);
+      setMediaCaption('');
     } catch (err) {
       if (DocumentPicker.isCancel(err)) {
         return;
@@ -499,7 +741,7 @@ const ChatScreen = ({ navigation, route }) => {
     }
   };
 
-  const handleSendMedia = async (asset) => {
+  const handleSendMedia = async (asset, caption = '') => {
     const mediaName = asset.fileName || 'Attachment';
     const mimeType = asset.type || 'application/octet-stream';
     const fileSize = asset.fileSize || 0;
@@ -507,7 +749,8 @@ const ChatScreen = ({ navigation, route }) => {
     const tempMessage = {
       id: generateUniqueId(),
       type: 'file',
-      text: `[File] ${mediaName}`,
+      text: caption || `[File] ${mediaName}`,
+      caption: caption || undefined,
       fileName: mediaName,
       mimeType,
       fileSize,
@@ -897,8 +1140,13 @@ const ChatScreen = ({ navigation, route }) => {
       );
     }
 
-    const normalizedUri = uri.startsWith('file://') ? uri : `file://${uri}`;
-    const safeUri = encodeURI(normalizedUri);
+    const isHttp = uri.startsWith('http://') || uri.startsWith('https://');
+    const normalizedUri = isHttp
+      ? uri
+      : uri.startsWith('file://')
+        ? uri
+        : `file://${uri}`;
+    const safeUri = isHttp ? uri : encodeURI(normalizedUri);
     const baseWebViewProps = {
       originWhitelist: ['*'],
       allowsInlineMediaPlayback: true,
@@ -916,7 +1164,7 @@ const ChatScreen = ({ navigation, route }) => {
     if (previewMedia.mimeType?.startsWith('video/')) {
       return (
         <Video
-          source={{ uri: normalizedUri }}
+          source={{ uri: safeUri }}
           style={styles.previewVideo}
           controls
           resizeMode="contain"
@@ -929,7 +1177,7 @@ const ChatScreen = ({ navigation, route }) => {
     if (previewMedia.mimeType?.startsWith('audio/')) {
       return (
         <Video
-          source={{ uri: normalizedUri }}
+          source={{ uri: safeUri }}
           style={styles.previewAudio}
           controls
           audioOnly
@@ -1015,6 +1263,22 @@ const ChatScreen = ({ navigation, route }) => {
                   </View>
                 )}
               </TouchableOpacity>
+              {item.caption && (
+                <Text
+                  style={[
+                    styles.messageText,
+                    isMyMessage ? styles.myMessageText : styles.peerMessageText,
+                    styles.captionText,
+                  ]}
+                >
+                  {item.caption}
+                </Text>
+              )}
+              {item.isForwarded && (
+                <View style={styles.forwardedIndicator}>
+                  <Text style={styles.forwardedText}>↗️ Forwarded</Text>
+                </View>
+              )}
               <Text style={styles.attachmentMeta}>
                 {mediaUploadService.formatBytes(item.fileSize)} · {item.status || 'pending'}
               </Text>
@@ -1044,14 +1308,21 @@ const ChatScreen = ({ navigation, route }) => {
               )}
             </View>
           ) : (
-            <Text
-              style={[
-                styles.messageText,
-                isMyMessage ? styles.myMessageText : styles.peerMessageText,
-              ]}
-            >
-              {item.text}
-            </Text>
+            <>
+              {item.isForwarded && (
+                <View style={styles.forwardedIndicator}>
+                  <Text style={styles.forwardedText}>↗️ Forwarded</Text>
+                </View>
+              )}
+              <Text
+                style={[
+                  styles.messageText,
+                  isMyMessage ? styles.myMessageText : styles.peerMessageText,
+                ]}
+              >
+                {item.text}
+              </Text>
+            </>
           )}
             {item.reaction && (
               <View
@@ -1088,11 +1359,12 @@ const ChatScreen = ({ navigation, route }) => {
 
   return (
     <>
-      <KeyboardAvoidingView
-        style={styles.container}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
-      >
+      <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
+        <KeyboardAvoidingView
+          style={styles.container}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
+        >
         <FlatList
           ref={flatListRef}
           data={messages}
@@ -1139,7 +1411,8 @@ const ChatScreen = ({ navigation, route }) => {
             Uploading media... {uploadProgress}%
           </Text>
         )}
-      </KeyboardAvoidingView>
+        </KeyboardAvoidingView>
+      </TouchableWithoutFeedback>
 
       <Modal
         visible={!!reactionTarget}
@@ -1185,6 +1458,89 @@ const ChatScreen = ({ navigation, route }) => {
             </TouchableWithoutFeedback>
           </View>
         </TouchableWithoutFeedback>
+      </Modal>
+
+      <Modal
+        visible={!!pendingMedia}
+        transparent
+        animationType="slide"
+        onRequestClose={handleCancelMediaCaption}
+      >
+        <View style={styles.captionModalOverlay}>
+          <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
+            <KeyboardAvoidingView
+              style={styles.captionModalContainer}
+              behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+              keyboardVerticalOffset={Platform.OS === 'ios' ? 40 : 0}
+            >
+              <Text style={styles.captionModalTitle}>Add Caption (Optional)</Text>
+              {pendingMedia && (
+                <View style={styles.captionPreviewContainer}>
+                  {isImageAttachment({ mimeType: pendingMedia.type, fileName: pendingMedia.fileName }) ? (
+                    <Image
+                      source={{ uri: pendingMedia.uri }}
+                      style={styles.captionPreviewImage}
+                      resizeMode="cover"
+                    />
+                  ) : (
+                    <View style={styles.captionPreviewPlaceholder}>
+                      <Text style={styles.captionPreviewEmoji}>
+                        {pendingMedia.type?.startsWith('video/')
+                          ? '🎬'
+                          : pendingMedia.type?.startsWith('audio/')
+                          ? '🎵'
+                          : pendingMedia.type === 'application/pdf'
+                          ? '📄'
+                          : '📁'}
+                      </Text>
+                      <Text style={styles.captionPreviewText}>
+                        {pendingMedia.fileName || 'File'}
+                      </Text>
+                    </View>
+                  )}
+                </View>
+              )}
+              <TextInput
+                style={styles.captionInput}
+                placeholder="Add a caption..."
+                placeholderTextColor={COLORS.textSecondary}
+                value={mediaCaption}
+                onChangeText={setMediaCaption}
+                multiline
+                maxLength={500}
+                autoFocus
+              />
+              <View style={styles.captionModalActions}>
+                <TouchableOpacity
+                  style={[styles.captionButton, styles.captionCancelButton]}
+                  onPress={handleCancelMediaCaption}
+                >
+                  <Text style={styles.captionCancelText}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.captionButton, styles.captionSendButton]}
+                  onPress={handleConfirmMediaWithCaption}
+                >
+                  <Text style={styles.captionSendText}>Send</Text>
+                </TouchableOpacity>
+              </View>
+            </KeyboardAvoidingView>
+          </TouchableWithoutFeedback>
+        </View>
+      </Modal>
+
+      <Modal
+        visible={!!forwardTarget}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setForwardTarget(null)}
+      >
+        <ForwardContactScreen
+          message={forwardTarget}
+          myPhone={normalizedMyPhone}
+          onClose={() => setForwardTarget(null)}
+          navigation={navigation}
+        />
       </Modal>
     </>
   );
@@ -1471,6 +1827,168 @@ const styles = StyleSheet.create({
     fontSize: 12,
     paddingHorizontal: STYLES.spacing.md,
     paddingBottom: STYLES.spacing.sm,
+  },
+  captionText: {
+    marginTop: STYLES.spacing.xs,
+  },
+  forwardedIndicator: {
+    marginTop: STYLES.spacing.xs,
+    marginBottom: STYLES.spacing.xs,
+  },
+  forwardedText: {
+    fontSize: 11,
+    color: COLORS.textSecondary,
+    fontStyle: 'italic',
+  },
+  captionModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    justifyContent: 'flex-end',
+  },
+  captionModalContainer: {
+    backgroundColor: COLORS.surface,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    padding: STYLES.spacing.lg,
+    maxHeight: '80%',
+  },
+  captionModalTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: COLORS.text,
+    marginBottom: STYLES.spacing.md,
+  },
+  captionPreviewContainer: {
+    width: '100%',
+    height: 200,
+    borderRadius: STYLES.borderRadius.md,
+    overflow: 'hidden',
+    marginBottom: STYLES.spacing.md,
+    backgroundColor: COLORS.background,
+  },
+  captionPreviewImage: {
+    width: '100%',
+    height: '100%',
+  },
+  captionPreviewPlaceholder: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: COLORS.background,
+  },
+  captionPreviewEmoji: {
+    fontSize: 48,
+    marginBottom: STYLES.spacing.sm,
+  },
+  captionPreviewText: {
+    fontSize: 14,
+    color: COLORS.textSecondary,
+  },
+  captionInput: {
+    backgroundColor: COLORS.background,
+    borderRadius: STYLES.borderRadius.md,
+    padding: STYLES.spacing.md,
+    fontSize: 16,
+    color: COLORS.text,
+    minHeight: 100,
+    maxHeight: 150,
+    marginBottom: STYLES.spacing.md,
+    textAlignVertical: 'top',
+  },
+  captionModalActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: STYLES.spacing.md,
+  },
+  captionButton: {
+    paddingHorizontal: STYLES.spacing.lg,
+    paddingVertical: STYLES.spacing.sm,
+    borderRadius: STYLES.borderRadius.md,
+    minWidth: 80,
+    alignItems: 'center',
+  },
+  captionCancelButton: {
+    backgroundColor: COLORS.background,
+  },
+  captionSendButton: {
+    backgroundColor: COLORS.primary,
+  },
+  captionCancelText: {
+    color: COLORS.text,
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  captionSendText: {
+    color: COLORS.surface,
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  forwardModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    justifyContent: 'flex-end',
+  },
+  forwardModalContainer: {
+    backgroundColor: COLORS.surface,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    maxHeight: '80%',
+  },
+  forwardModalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: STYLES.spacing.lg,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.border,
+  },
+  forwardModalTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: COLORS.text,
+  },
+  forwardModalClose: {
+    fontSize: 24,
+    color: COLORS.textSecondary,
+    fontWeight: 'bold',
+  },
+  forwardLoadingContainer: {
+    padding: STYLES.spacing.xl,
+    alignItems: 'center',
+  },
+  forwardContactList: {
+    maxHeight: 500,
+  },
+  forwardContactItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: STYLES.spacing.md,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.border,
+  },
+  forwardContactAvatar: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    backgroundColor: COLORS.primary,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: STYLES.spacing.md,
+  },
+  forwardContactAvatarText: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: COLORS.surface,
+  },
+  forwardContactName: {
+    flex: 1,
+    fontSize: 16,
+    color: COLORS.text,
+  },
+  forwardContactOnline: {
+    fontSize: 12,
+    color: '#34c759',
+    marginLeft: STYLES.spacing.sm,
   },
 });
 

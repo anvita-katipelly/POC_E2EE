@@ -22,6 +22,7 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
 import RegisterScreen from './src/screens/RegisterScreen';
+import OtpScreen from './src/screens/OtpScreen';
 import PeersListScreen from './src/screens/PeersListScreen';
 import ChatScreen from './src/screens/ChatScreen';
 import CallScreen from './src/screens/CallScreen';
@@ -53,6 +54,11 @@ const App = () => {
             name="Register"
             component={RegisterScreen}
             options={{ headerShown: false }}
+          />
+          <Stack.Screen
+            name="OtpVerification"
+            component={OtpScreen}
+            options={{ title: 'Verify OTP' }}
           />
           <Stack.Screen
             name="PeersList"
